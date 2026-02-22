@@ -1,112 +1,117 @@
 # repoworktree
 
-为 repo 管理的多仓库项目创建隔离工作空间。基于 git worktree + symlink，支持从全 symlink（零开销只读）到全 worktree（完全隔离）的连续光谱。
+[![PyPI](https://img.shields.io/pypi/v/repoworktree)](https://pypi.org/project/repoworktree/)
+[![Python](https://img.shields.io/pypi/pyversions/repoworktree)](https://pypi.org/project/repoworktree/)
+
+Create isolated workspaces for Google `repo`-managed multi-repository projects using git worktree + symlink. Supports a continuous spectrum from all-symlink (zero overhead, read-only) to all-worktree (fully isolated).
+
+[中文文档](README_zh.md)
 
 ```
-全 symlink (只读)                                    全 worktree (完全隔离)
+All symlink (read-only)                              All worktree (fully isolated)
 │  rwt create /tmp/ws              rwt create /tmp/ws --all  │
-│         ◄── rwt promote / demote 动态切换 ──►              │
-└──────────────────────────────────────────────────────────┘
+│         ◄── rwt promote / demote dynamically ──►           │
+└────────────────────────────────────────────────────────────┘
 ```
 
-## 安装
+## Install
 
-Python 3.10+，无第三方依赖。
+Python 3.10+, no third-party dependencies.
 
 ```bash
 pip install repoworktree
 ```
 
-## 快速开始
+## Quick Start
 
 ```bash
-# 创建工作空间，指定需要修改的仓库
+# Create workspace, specify repos to modify
 rwt create /tmp/ws-agent1 -w nuttx,apps -n "fix-serial-driver"
 
-# 在工作空间中开发
+# Develop in the workspace
 cd /tmp/ws-agent1
-source envsetup.sh && lunch && m   # 构建正常工作
+source envsetup.sh && lunch && m   # build works normally
 
-# 开发中发现需要修改更多仓库
+# Need to modify more repos during development
 rwt promote frameworks/system/core
 
-# 完成后不再需要修改的仓库降级回 symlink
+# Done with a repo, demote back to symlink
 rwt demote frameworks/system/core
 
-# 销毁工作空间
+# Destroy workspace
 rwt destroy /tmp/ws-agent1
 ```
 
-## 命令参考
+## Command Reference
 
-### `rwt create` — 创建工作空间
+### `rwt create` — Create workspace
 
 ```bash
 rwt create <path> [options]
 ```
 
-| 选项 | 说明 |
-|------|------|
-| `<path>` | 工作空间目标路径 |
-| `-n, --name` | 工作空间名称（默认：目录名） |
-| `-w, --worktree` | 逗号分隔的子仓库路径，创建为 git worktree |
-| `--all` | 所有子仓库都创建 git worktree |
-| `-s, --source` | 主 repo checkout 路径（默认：自动检测 `.repo/`） |
-| `--pin` | 锁定版本，格式 `repo=version[,repo=version,...]` |
-| `-b, --branch` | 为 worktree 创建命名分支而非 detached HEAD |
+| Option | Description |
+|--------|-------------|
+| `<path>` | Workspace target path |
+| `-n, --name` | Workspace name (default: directory name) |
+| `-w, --worktree` | Comma-separated sub-repo paths to create as git worktrees |
+| `--all` | Create git worktrees for all sub-repos |
+| `-s, --source` | Main repo checkout path (default: auto-detect `.repo/`) |
+| `--pin` | Pin version, format `repo=version[,repo=version,...]` |
+| `-b, --branch` | Create named branch instead of detached HEAD |
 
-示例：
+Examples:
 
 ```bash
-# 全 symlink 只读（极端 A）
+# All symlink read-only (extreme A)
 rwt create /tmp/ws-readonly
 
-# 典型用法：修改少量仓库
+# Typical: modify a few repos
 rwt create /tmp/ws-agent1 -w nuttx,apps -n "fix-serial-driver"
 
-# 修改嵌套子仓库
+# Modify nested sub-repo
 rwt create /tmp/ws-bt -w nuttx,apps/system/adb
 
-# 父子仓库同时修改
+# Parent and child repos both writable
 rwt create /tmp/ws-dev -w apps,apps/system/adb
 
-# 全 worktree 完全隔离（极端 B）
+# All worktree fully isolated (extreme B)
 rwt create /tmp/ws-full --all
 
-# 锁定版本 + 命名分支
+# Pin version + named branch
 rwt create /tmp/ws-stable -w nuttx --pin nuttx=v12.0.0 -b feature/new-driver
 ```
 
-### `rwt destroy` — 销毁工作空间
+### `rwt destroy` — Destroy workspace
 
 ```bash
 rwt destroy <path|name> [-f]
 ```
 
-| 选项 | 说明 |
-|------|------|
-| `<path\|name>` | 工作空间路径或名称 |
-| `-f, --force` | 强制销毁，即使有未提交修改 |
+| Option | Description |
+|--------|-------------|
+| `<path\|name>` | Workspace path or name |
+| `-f, --force` | Force destroy even with uncommitted changes or local commits |
 
 ```bash
 rwt destroy /tmp/ws-agent1
-rwt destroy fix-serial-driver     # 按名称
-rwt destroy /tmp/ws-dirty -f      # 丢弃未提交修改
+rwt destroy fix-serial-driver     # by name
+rwt destroy /tmp/ws-dirty -f      # discard uncommitted changes
 ```
 
-### `rwt promote` — 提升子仓库为可写 worktree
+### `rwt promote` — Promote sub-repo to writable worktree
 
-在工作空间内执行，将 symlink 的子仓库动态提升为 git worktree。
+Run inside a workspace to dynamically promote a symlinked sub-repo to a git worktree.
 
 ```bash
 rwt promote <repo_path> [options]
 ```
 
-| 选项 | 说明 |
-|------|------|
-| `<repo_path>` | 子仓库路径（如 `nuttx`、`frameworks/system/core`） |
-| `--pin` | checkout 到指定版本 |
-| `-b, --branch` | 创建命名分支 |
+| Option | Description |
+|--------|-------------|
+| `<repo_path>` | Sub-repo path (e.g. `nuttx`, `frameworks/system/core`) |
+| `--pin` | Checkout specific version |
+| `-b, --branch` | Create named branch |
 
 ```bash
 cd /tmp/ws-agent1
@@ -115,127 +120,131 @@ rwt promote frameworks/system/core --pin abc1234
 rwt promote nuttx -b fix/uart-bug
 ```
 
-promote 自动处理嵌套情况：
-- 顶层 symlink → 直接替换为 worktree
-- 深层嵌套（如 `frameworks/system/core`）→ 自动拆解父级 symlink 为真实目录 + symlink 混合结构
-- 父仓库已有子 worktree → 临时移除子 worktree，创建父 worktree，再恢复子 worktree
+Promote handles nesting automatically:
+- Top-level symlink → directly replaced with worktree
+- Deep nested (e.g. `frameworks/system/core`) → parent symlinks split into real dir + symlink mix
+- Parent repo already has child worktrees → temporarily removes children, creates parent worktree, restores children
 
-### `rwt demote` — 降级 worktree 为只读 symlink
+### `rwt demote` — Demote worktree to read-only symlink
 
 ```bash
 rwt demote <repo_path> [-f]
 ```
 
-| 选项 | 说明 |
-|------|------|
-| `<repo_path>` | 子仓库路径 |
-| `-f, --force` | 强制降级，丢弃未提交修改 |
+| Option | Description |
+|--------|-------------|
+| `<repo_path>` | Sub-repo path |
+| `-f, --force` | Force demote, discard uncommitted changes |
 
 ```bash
 rwt demote apps
-rwt demote apps -f    # 丢弃修改
+rwt demote apps -f    # discard changes
 ```
 
-demote 自动处理：
-- 有子 worktree 时保留子 worktree，父目录重建为真实目录 + symlink 结构
-- 无子 worktree 时向上合并，尽可能将父目录恢复为 symlink
+Demote handles nesting automatically:
+- With child worktrees → preserves children, rebuilds parent as real dir + symlink structure
+- Without child worktrees → collapses upward, restoring parent directories to symlinks
 
-### `rwt list` — 列出所有工作空间
+### `rwt list` — List all workspaces
 
 ```bash
 rwt list [-s <source>] [--json]
 ```
 
-### `rwt status` — 查看工作空间详情
+### `rwt status` — Show workspace details
 
 ```bash
 rwt status [<path|name>] [--json]
 ```
 
-### `rwt sync` — 同步工作空间
+### `rwt sync` — Sync workspace
 
 ```bash
 rwt sync [--rebase]
 ```
 
-主仓库 `repo sync` 后，symlink 自动跟随更新。worktree 需要手动 sync：
+After `repo sync` on the main checkout, symlinks follow automatically. Worktrees need manual sync:
 
-| 子仓库状态 | 默认行为 | `--rebase` 行为 |
-|-----------|----------|----------------|
-| symlink | 自动跟随 | 同左 |
-| worktree, pinned | 跳过 | 跳过 |
-| worktree, 有本地修改 | 跳过，报告 | 跳过，报告 |
-| worktree, 有本地 commit | 跳过，报告 | rebase 到最新 |
-| worktree, clean | 更新到主仓库 HEAD | 同左 |
+| Worktree state | Default | `--rebase` |
+|----------------|---------|------------|
+| symlink | auto follows | same |
+| worktree, pinned | skip | skip |
+| worktree, uncommitted changes | skip, report | skip, report |
+| worktree, local commits | skip, report | rebase onto latest |
+| worktree, clean | update to source HEAD | same |
 
-### `rwt pin` / `rwt unpin` — 版本锁定
+### `rwt pin` / `rwt unpin` — Version pinning
 
 ```bash
 rwt pin <repo_path> [<version>]
 rwt unpin <repo_path>
 ```
 
-### `rwt export` — 导出变更
+### `rwt export` — Export changes
 
 ```bash
 rwt export [--format patch|bundle] [-o <dir>]
 ```
 
-## 典型场景
+## Use Cases
 
-### 多 agent 并行开发
+### Parallel multi-agent development
 
 ```bash
-# 两个 agent 同时修改 nuttx，互不影响
+# Two agents modify nuttx simultaneously, fully isolated
 rwt create /tmp/ws-agent1 -w nuttx -n "agent1-serial-fix"
 rwt create /tmp/ws-agent2 -w nuttx -n "agent2-spi-driver"
 ```
 
-### 开发过程中动态调整
+### Dynamic adjustment during development
 
 ```bash
-# 初始只修改 nuttx
+# Start with only nuttx
 rwt create /tmp/ws-dev -w nuttx
 
 cd /tmp/ws-dev
 
-# 发现需要修改 apps/system/adb
+# Need to modify apps/system/adb
 rwt promote apps/system/adb
 
-# 又需要修改 apps 本身
+# Also need to modify apps itself
 rwt promote apps
 
-# apps 改完了，降级回 symlink
+# Done with apps, demote back
 rwt demote apps
 ```
 
-### 导出变更到主目录
+### Push changes to Gerrit
 
 ```bash
 cd /tmp/ws-agent1/nuttx
-git push origin HEAD:refs/for/main    # 直接推送到 Gerrit
+git push origin HEAD:refs/for/main
 ```
 
-## 工作空间结构
+## Workspace Structure
 
 ```
 /tmp/ws-agent1/
-├── .workspace.json     # 工作空间元数据
-├── nuttx/              # git worktree（可写）
-├── apps/               # 真实目录（内部有 worktree 后代）
+├── .workspace.json     # workspace metadata
+├── nuttx/              # git worktree (writable)
+├── apps/               # real directory (has worktree descendants)
 │   ├── system/
-│   │   ├── adb/        # git worktree（可写）
-│   │   └── core/       # symlink → source（只读）
-│   └── benchmarks/     # symlink → source（只读）
-├── build/              # symlink → source（只读）
-├── frameworks/         # symlink → source（只读）
-├── build.sh            # symlink（保持原始相对链接）
+│   │   ├── adb/        # git worktree (writable)
+│   │   └── core/       # symlink → source (read-only)
+│   └── benchmarks/     # symlink → source (read-only)
+├── build/              # symlink → source (read-only)
+├── frameworks/         # symlink → source (read-only)
+├── build.sh            # symlink (preserves original relative link)
 └── CLAUDE.md           # symlink → source
 ```
 
-## 原理
+## How It Works
 
-- **symlink 子仓库**：零开销，直接指向主 checkout 的对应目录，只读（修改会影响主目录）
-- **worktree 子仓库**：通过 `git worktree add` 创建独立工作副本，有自己的 HEAD、index、工作树，完全隔离
-- **嵌套仓库**：repo 管理的项目中存在父子仓库（如 `apps/` 和 `apps/system/adb/` 是独立 git 仓库）。当子仓库需要 worktree 时，父级 symlink 被拆解为真实目录 + symlink 混合结构，只在通往 worktree 的路径上创建真实目录
-- **元数据**：`.workspace.json` 记录工作空间配置，主目录的 `.workspaces.json` 索引所有工作空间
+- **Symlinked repos**: Zero overhead, point directly to the main checkout directory. Read-only — modifications affect the main checkout.
+- **Worktree repos**: Created via `git worktree add` with their own HEAD, index, and working tree. Fully isolated.
+- **Nested repos**: `repo`-managed projects have parent-child repos (e.g. `apps/` and `apps/system/adb/` are independent git repos). When a child needs a worktree, parent symlinks are split into real directories with symlinked siblings — real directories are only created along the path to the worktree.
+- **Metadata**: `.workspace.json` stores per-workspace config. `.workspaces.json` in the source root indexes all workspaces.
+
+## License
+
+MIT
