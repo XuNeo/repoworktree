@@ -18,6 +18,7 @@ import pytest
 # Sub-repo definitions: (bare_repo_name, checkout_path, initial_files)
 REPO_DEFS = [
     ("nuttx", "nuttx", {"README.md": "# NuttX RTOS", "tools/Unix.mk": "# makefile"}),
+    ("nuttx-fs-fatfs", "nuttx/fs/fatfs", {"README.md": "# FatFS", "fatfs.c": "// fatfs"}),
     ("apps", "apps", {"README.md": "# Apps", "Makefile": "# apps makefile"}),
     ("apps-system-adb", "apps/system/adb", {"README.md": "# ADB", "adb.c": "// adb"}),
     ("apps-system-core", "apps/system/core", {"README.md": "# Core", "core.c": "// core"}),

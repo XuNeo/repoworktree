@@ -5,9 +5,9 @@ from repoworktree.scanner import scan_repos, build_trie, RepoTrie
 
 
 def test_scan_project_list(repo_env):
-    """From .repo/project.list, correctly parse all 12 sub-repo paths."""
+    """From .repo/project.list, correctly parse all 13 sub-repo paths."""
     paths = scan_repos(repo_env.source_dir)
-    assert len(paths) == 12
+    assert len(paths) == 13
     assert paths == repo_env.all_repo_paths
 
 
@@ -24,7 +24,7 @@ def test_scan_no_repo_dir(tmp_path):
 
 
 def test_trie_build(repo_env):
-    """12 paths build a correct trie structure."""
+    """13 paths build a correct trie structure."""
     paths = scan_repos(repo_env.source_dir)
     trie = build_trie(paths)
 
@@ -32,11 +32,11 @@ def test_trie_build(repo_env):
     top_names = sorted(n.name for n in trie.top_level_children)
     assert top_names == ["apps", "build", "external", "frameworks", "nuttx"]
 
-    # nuttx should be a leaf repo
+    # nuttx should be a repo with a child (nuttx/fs/fatfs)
     nuttx = trie.lookup("nuttx")
     assert nuttx is not None
     assert nuttx.is_repo
-    assert len(nuttx.children) == 0
+    assert "fs" in nuttx.children
 
     # apps should be a repo with children
     apps = trie.lookup("apps")

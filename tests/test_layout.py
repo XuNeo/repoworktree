@@ -145,7 +145,22 @@ def test_multiple_worktrees_different_trees(repo_env, workspace_dir):
     teardown_workspace(repo_env.source_dir, workspace_dir, trie)
 
 
-def test_top_level_files_symlinks(repo_env, workspace_dir):
+def test_parent_worktree_child_repo_symlinked(repo_env, workspace_dir):
+    """When nuttx is worktree, child repo nuttx/fs/fatfs must be symlinked on top."""
+    paths = scan_repos(repo_env.source_dir)
+    trie = build_trie(paths, worktree_paths={"nuttx"})
+
+    build_workspace(repo_env.source_dir, workspace_dir, trie)
+
+    assert_is_worktree(workspace_dir / "nuttx")
+    # nuttx/fs/fatfs is a separate repo — it must exist as a symlink
+    fatfs_ws = workspace_dir / "nuttx" / "fs" / "fatfs"
+    assert fatfs_ws.exists(), f"Child repo nuttx/fs/fatfs missing from workspace"
+    assert_is_symlink(fatfs_ws)
+    # Should point to source
+    assert fatfs_ws.resolve() == (repo_env.source_dir / "nuttx" / "fs" / "fatfs").resolve()
+
+    teardown_workspace(repo_env.source_dir, workspace_dir, trie)
     """Top-level symlink files (like build.sh) are rebuilt in workspace."""
     paths = scan_repos(repo_env.source_dir)
     trie = build_trie(paths, worktree_paths={"nuttx"})

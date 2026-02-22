@@ -11,10 +11,10 @@ def test_repo_env_created(repo_env):
 
 
 def test_repo_env_has_all_repos(repo_env):
-    """Verify all 12 sub-repos are checked out."""
+    """Verify all 13 sub-repos are checked out."""
     project_list = (repo_env.source_dir / ".repo" / "project.list").read_text()
     paths = sorted(line.strip() for line in project_list.strip().splitlines() if line.strip())
-    assert len(paths) == 12
+    assert len(paths) == 13
     assert paths == repo_env.all_repo_paths
 
 

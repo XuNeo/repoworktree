@@ -61,6 +61,16 @@ def add_worktree(
     try:
         _git(cmd, cwd=source_repo)
     except subprocess.CalledProcessError as e:
+        if "already registered worktree" in e.stderr:
+            # Stale worktree reference — prune and retry
+            _git(["worktree", "prune"], cwd=source_repo)
+            try:
+                _git(cmd, cwd=source_repo)
+                return
+            except subprocess.CalledProcessError as e2:
+                raise WorktreeError(
+                    f"Failed to create worktree at {target_path}: {e2.stderr.strip()}"
+                ) from e2
         raise WorktreeError(
             f"Failed to create worktree at {target_path}: {e.stderr.strip()}"
         ) from e

@@ -12,6 +12,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import subprocess
+
 from repoworktree.scanner import RepoTrie, TrieNode
 from repoworktree.worktree import add_worktree as git_worktree_add
 
@@ -70,6 +72,7 @@ def _build_level(
     workspace_root: Path,
     branch: str | None,
     pin_map: dict[str, str],
+    inside_worktree: bool = False,
 ) -> None:
     """
     Recursively build one level of the directory tree.
@@ -79,6 +82,10 @@ def _build_level(
       - If it also has worktree descendants → recurse into children for nested worktrees
     - If it has worktree descendants → mkdir + recurse
     - Otherwise → symlink
+
+    Args:
+        inside_worktree: True when recursing inside a parent worktree checkout.
+            Controls whether intermediate dirs are created for child repo paths.
     """
     for name, child in trie_node.children.items():
         child_source = source / name
@@ -90,16 +97,21 @@ def _build_level(
             pin = pin_map.get(rel_path)
             git_worktree_add(child_source, child_workspace, branch=branch, pin_version=pin)
 
-            # If this repo also has worktree descendants (parent-child case),
-            # recurse to create child worktrees on top
-            if child.has_worktree_descendant:
+            # If this repo has child repos in the trie, recurse to handle them.
+            # Child repos that are worktrees get created on top;
+            # child repos that aren't worktrees get symlinked on top.
+            if child.children:
                 _build_level(
                     child_source, child_workspace, child,
                     source_root, workspace_root, branch, pin_map,
+                    inside_worktree=True,
                 )
+                # Exclude non-worktree child repo paths from git status
+                # so symlinked child repos don't appear as dirty
+                _exclude_child_repos(child_workspace, child)
 
-        elif child.has_worktree_descendant or (child.is_worktree):
-            # Intermediate directory: create real dir and recurse
+        elif child.has_worktree_descendant:
+            # Intermediate directory leading to a worktree: create real dir and recurse
             child_workspace.mkdir(parents=True, exist_ok=True)
 
             # Symlink all source entries that aren't handled by trie children
@@ -109,15 +121,43 @@ def _build_level(
             _build_level(
                 child_source, child_workspace, child,
                 source_root, workspace_root, branch, pin_map,
+                inside_worktree=inside_worktree,
             )
 
-        else:
-            # No worktree in this subtree: symlink the whole thing
-            if child_source.exists():
+        elif inside_worktree:
+            # We're inside a parent worktree checkout. Child repos in the trie
+            # need to be symlinked on top, and intermediate dirs may need creation.
+            if child.is_repo and child_workspace.exists() and not child_workspace.is_symlink():
+                # Child repo dir exists from parent worktree checkout —
+                # replace with symlink to source so it has the correct content.
+                import shutil
+                shutil.rmtree(child_workspace)
                 child_workspace.symlink_to(child_source)
-            # If it's a repo node without worktree and no descendants,
-            # and the source doesn't exist as a standalone dir (shouldn't happen),
-            # just skip
+            elif child.is_repo and not child_workspace.exists():
+                # Child repo doesn't exist in parent worktree — symlink it.
+                child_workspace.symlink_to(child_source)
+            elif child.children and child_workspace.is_dir() and not child_workspace.is_symlink():
+                # Intermediate dir exists from parent worktree. Recurse.
+                _build_level(
+                    child_source, child_workspace, child,
+                    source_root, workspace_root, branch, pin_map,
+                    inside_worktree=True,
+                )
+            elif child.children and not child_workspace.exists():
+                # Intermediate dir doesn't exist in parent worktree. Create and recurse.
+                child_workspace.mkdir(parents=True, exist_ok=True)
+                _build_level(
+                    child_source, child_workspace, child,
+                    source_root, workspace_root, branch, pin_map,
+                    inside_worktree=True,
+                )
+            elif child_source.exists() and not child_workspace.exists():
+                child_workspace.symlink_to(child_source)
+
+        else:
+            # Top-level (not inside a worktree): just symlink.
+            if child_source.exists() and not child_workspace.exists():
+                child_workspace.symlink_to(child_source)
 
 
 def _symlink_non_trie_entries(source_dir: Path, workspace_dir: Path, trie_node: TrieNode) -> None:
@@ -142,6 +182,69 @@ def _symlink_non_trie_entries(source_dir: Path, workspace_dir: Path, trie_node: 
         target = workspace_dir / entry.name
         if not target.exists() and not target.is_symlink():
             target.symlink_to(entry)
+
+
+def _exclude_child_repos(worktree_path: Path, trie_node: TrieNode) -> None:
+    """
+    Hide non-worktree child repo paths from git in a parent worktree.
+
+    Uses skip-worktree flag for tracked files and .git/info/exclude for
+    untracked paths (intermediate dirs created for child repo symlinks).
+    Also writes a .gitignore in the worktree root as a reliable fallback.
+    """
+    excludes = []
+    _collect_non_worktree_repo_paths(trie_node, "", excludes)
+    if not excludes:
+        return
+
+    # For each child repo path, mark all tracked files as --skip-worktree
+    for path in excludes:
+        result = subprocess.run(
+            ["git", "ls-files", "--", path],
+            cwd=worktree_path, check=False, capture_output=True, text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            files = result.stdout.strip().splitlines()
+            for f in files:
+                subprocess.run(
+                    ["git", "update-index", "--skip-worktree", "--", f],
+                    cwd=worktree_path, check=False, capture_output=True,
+                )
+
+    # Write exclude patterns to .gitignore at worktree root
+    # (more reliable than info/exclude for worktrees)
+    gitignore = worktree_path / ".gitignore"
+    lines = []
+    if gitignore.exists():
+        lines = gitignore.read_text().splitlines()
+    lines.append("# Child repos managed by repoworktree")
+    for path in excludes:
+        lines.append(f"/{path}")
+    gitignore.write_text("\n".join(lines) + "\n")
+
+    # Also exclude .gitignore itself so it doesn't show as untracked
+    if "/.gitignore" not in lines:
+        with open(gitignore, "a") as f:
+            f.write("/.gitignore\n")
+
+
+def _collect_non_worktree_repo_paths(node: TrieNode, prefix: str, result: list[str]) -> None:
+    """Recursively collect relative paths of non-worktree child repos and their intermediates."""
+    for name, child in node.children.items():
+        child_path = f"{prefix}/{name}" if prefix else name
+        if child.is_repo and not child.is_worktree:
+            # Add the repo path itself
+            result.append(child_path)
+            # Also add all intermediate path components that lead to it
+            # e.g. for "fs/fatfs", also add "fs"
+            parts = child_path.split("/")
+            for i in range(1, len(parts)):
+                intermediate = "/".join(parts[:i])
+                if intermediate not in result:
+                    result.append(intermediate)
+        # Recurse into intermediate nodes
+        if child.children:
+            _collect_non_worktree_repo_paths(child, child_path, result)
 
 
 def _process_top_level_files(source: Path, workspace: Path) -> None:
