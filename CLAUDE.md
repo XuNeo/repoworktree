@@ -28,11 +28,15 @@ Tests use a session-scoped `repo_env` fixture (creates 12 bare repos + `repo ini
 
 Data flow: `scanner.py` (parse `.repo/project.list` → prefix trie) → `layout.py` (trie → directory tree) → `metadata.py` (persist to `.workspace.json`)
 
+CLI entry point: `__main__.py` defines all `cmd_*` handlers and the argparse tree. The `rwt` console script maps to `__main__:main`.
+
 Key design patterns:
-- **Prefix trie** (`scanner.py`): Each node has `is_repo`, `is_worktree`, `has_worktree_descendant` — drives whether a path becomes symlink, real dir, or worktree
-- **Nested repo handling** (`promote.py`): Parent-child repo pairs (e.g. `apps/` and `apps/system/adb/`) require temporarily removing child worktrees before operating on parent, then restoring
-- **Symlink splitting**: Promoting a deep repo like `frameworks/system/core` recursively splits parent symlinks into real directories with symlinked siblings
-- **Upward collapse**: Demoting merges empty parent directories back into symlinks
+- **Prefix trie** (`scanner.py`): Each node has `is_repo`, `is_worktree`, `has_worktree_descendant` — drives whether a path becomes symlink, real dir, or worktree. `has_worktree_descendant` is lazily cached and must be invalidated via `invalidate_cache()` when marking worktrees.
+- **Nested repo handling** (`promote.py`): Parent-child repo pairs (e.g. `apps/` and `apps/system/adb/`) require temporarily removing child worktrees before operating on parent, then restoring. This remove-operate-restore pattern is used in both `promote()` and `demote()`.
+- **Symlink splitting** (`promote.py:_ensure_path_is_real`): Promoting a deep repo like `frameworks/system/core` recursively splits parent symlinks into real directories with symlinked siblings.
+- **Upward collapse** (`promote.py:_try_collapse_upward`): Demoting merges empty parent directories back into symlinks, walking from deepest parent up to top.
+- **Dual metadata files**: `.workspace.json` (per-workspace config) and `.workspaces.json` (source-root index of all workspaces). Both in `metadata.py`.
+- **Atomic create**: `cmd_create` builds into a `.tmp` directory then renames, with rollback on failure.
 
 ## Code Conventions
 
@@ -40,6 +44,7 @@ Key design patterns:
 - Type hints: `X | None` (not `Optional[X]`)
 - All git operations go through `worktree.py:_git()` helper
 - Metadata mutations must call `save_workspace_metadata()` after modification
+- Worktree teardown order: deepest paths first (sorted by path depth descending) to handle parent-child correctly
 
 ## Git Safety
 
