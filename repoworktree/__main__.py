@@ -212,13 +212,25 @@ def cmd_destroy(args):
 
     # Check for dirty worktrees unless --force
     if not args.force:
-        from repoworktree.worktree import has_local_changes
+        from repoworktree.worktree import has_local_changes, has_local_commits, get_head
+        blockers = []
         for wt in meta.worktrees:
             wt_path = ws_path / wt.path
-            if wt_path.exists() and has_local_changes(wt_path):
-                print(f"Error: Worktree has uncommitted changes: {wt.path}", file=sys.stderr)
-                print(f"Use --force to destroy anyway.", file=sys.stderr)
-                return 1
+            src_path = source_dir / wt.path
+            if not wt_path.exists():
+                continue
+            if has_local_changes(wt_path):
+                blockers.append(f"  {wt.path}: uncommitted changes")
+            elif src_path.exists():
+                src_head = get_head(src_path)
+                if has_local_commits(wt_path, src_head):
+                    blockers.append(f"  {wt.path}: unpushed local commits")
+        if blockers:
+            print("Error: Cannot destroy workspace:", file=sys.stderr)
+            for b in blockers:
+                print(b, file=sys.stderr)
+            print("Use --force to destroy anyway.", file=sys.stderr)
+            return 1
 
     print(f"Destroying workspace '{meta.name}' at {ws_path}")
 
@@ -231,7 +243,8 @@ def cmd_destroy(args):
             try:
                 remove_worktree(source_repo, wt_path, force=True)
                 print(f"  Removed worktree: {wt.path}")
-            except Exception:
+            except Exception as e:
+                print(f"  Warning: failed to remove worktree {wt.path}: {e}", file=sys.stderr)
                 # Fallback: prune from source side
                 try:
                     import subprocess
