@@ -224,6 +224,12 @@ def _exclude_child_repos(worktree_path: Path, trie_node: TrieNode) -> None:
         lines.append("/.gitignore")
     gitignore.write_text("\n".join(lines) + "\n")
 
+    # Mark .gitignore as skip-worktree so our modifications don't show as dirty
+    subprocess.run(
+        ["git", "update-index", "--skip-worktree", "--", ".gitignore"],
+        cwd=worktree_path, check=False, capture_output=True,
+    )
+
 
 def _collect_non_worktree_repo_paths(node: TrieNode, prefix: str, result: list[str]) -> None:
     """Recursively collect relative paths of non-worktree child repos and their intermediates."""
