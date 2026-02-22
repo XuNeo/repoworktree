@@ -197,19 +197,25 @@ def _exclude_child_repos(worktree_path: Path, trie_node: TrieNode) -> None:
     if not excludes:
         return
 
-    # Mark tracked files as skip-worktree so git ignores content changes
+    # Mark tracked files as skip-worktree so git ignores content changes.
+    # Batch all paths into a single git ls-files call, then a single update-index.
+    all_tracked = []
     for path in excludes:
         result = subprocess.run(
             ["git", "ls-files", "--", path],
             cwd=worktree_path, check=False, capture_output=True, text=True,
         )
         if result.returncode == 0 and result.stdout.strip():
-            files = result.stdout.strip().splitlines()
-            for f in files:
-                subprocess.run(
-                    ["git", "update-index", "--skip-worktree", "--", f],
-                    cwd=worktree_path, check=False, capture_output=True,
-                )
+            all_tracked.extend(result.stdout.strip().splitlines())
+
+    if all_tracked:
+        # Batch update-index via --stdin
+        input_data = "\n".join(all_tracked) + "\n"
+        subprocess.run(
+            ["git", "update-index", "--skip-worktree", "--stdin"],
+            cwd=worktree_path, check=False, capture_output=True,
+            input=input_data, text=True,
+        )
 
     # Write .gitignore for untracked intermediate dirs/symlinks
     gitignore = worktree_path / ".gitignore"
