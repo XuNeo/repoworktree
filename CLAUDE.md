@@ -22,7 +22,7 @@ pytest tests/test_promote.py -v
 pytest tests/test_integration.py::test_scenario_05_promote_parent -xvs
 ```
 
-Tests use a session-scoped `repo_env` fixture (creates 12 bare repos + `repo init` + `repo sync`) and per-test `workspace_dir` fixture, both in `tests/conftest.py`. Test helpers in `tests/helpers.py`.
+Tests use a session-scoped `repo_env` fixture (creates 13 bare repos + `repo init` + `repo sync`) and per-test `workspace_dir` fixture, both in `tests/conftest.py`. Test helpers in `tests/helpers.py`.
 
 ## Architecture
 
@@ -33,6 +33,7 @@ CLI entry point: `__main__.py` defines all `cmd_*` handlers and the argparse tre
 Key design patterns:
 - **Prefix trie** (`scanner.py`): Each node has `is_repo`, `is_worktree`, `has_worktree_descendant` — drives whether a path becomes symlink, real dir, or worktree. `has_worktree_descendant` is lazily cached and must be invalidated via `invalidate_cache()` when marking worktrees.
 - **Nested repo handling** (`promote.py`): Parent-child repo pairs (e.g. `apps/` and `apps/system/adb/`) require temporarily removing child worktrees before operating on parent, then restoring. This remove-operate-restore pattern is used in both `promote()` and `demote()`.
+- **Child repo under parent worktree** (`layout.py`): When a parent repo is a worktree, child repos (separate git repos) are NOT included in the git checkout. `_build_level` uses `inside_worktree` flag to create intermediate dirs and symlink child repos on top. `_exclude_child_repos` hides these from git via `skip-worktree` (tracked files) and `.gitignore` (untracked dirs). Note: `info/exclude` doesn't work reliably for worktrees.
 - **Symlink splitting** (`promote.py:_ensure_path_is_real`): Promoting a deep repo like `frameworks/system/core` recursively splits parent symlinks into real directories with symlinked siblings.
 - **Upward collapse** (`promote.py:_try_collapse_upward`): Demoting merges empty parent directories back into symlinks, walking from deepest parent up to top.
 - **Dual metadata files**: `.workspace.json` (per-workspace config) and `.workspaces.json` (source-root index of all workspaces). Both in `metadata.py`.
