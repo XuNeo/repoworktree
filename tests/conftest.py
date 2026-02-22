@@ -1,7 +1,7 @@
 """
 Pytest fixtures for repo-workspace tests.
 
-Creates a real repo-managed test environment with 12 sub-repos,
+Creates a real repo-managed test environment with 13 sub-repos,
 including nested repos (apps/system/adb, frameworks/system/core, etc.).
 Uses local bare git repos as remotes.
 """
