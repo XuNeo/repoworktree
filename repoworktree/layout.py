@@ -188,16 +188,16 @@ def _exclude_child_repos(worktree_path: Path, trie_node: TrieNode) -> None:
     """
     Hide non-worktree child repo paths from git in a parent worktree.
 
-    Uses skip-worktree flag for tracked files and .git/info/exclude for
-    untracked paths (intermediate dirs created for child repo symlinks).
-    Also writes a .gitignore in the worktree root as a reliable fallback.
+    Uses skip-worktree flag for tracked files that get replaced by symlinks,
+    and .gitignore for untracked intermediate dirs we create (info/exclude
+    is not reliably read for worktrees by all git versions).
     """
     excludes = []
     _collect_non_worktree_repo_paths(trie_node, "", excludes)
     if not excludes:
         return
 
-    # For each child repo path, mark all tracked files as --skip-worktree
+    # Mark tracked files as skip-worktree so git ignores content changes
     for path in excludes:
         result = subprocess.run(
             ["git", "ls-files", "--", path],
@@ -211,21 +211,19 @@ def _exclude_child_repos(worktree_path: Path, trie_node: TrieNode) -> None:
                     cwd=worktree_path, check=False, capture_output=True,
                 )
 
-    # Write exclude patterns to .gitignore at worktree root
-    # (more reliable than info/exclude for worktrees)
+    # Write .gitignore for untracked intermediate dirs/symlinks
     gitignore = worktree_path / ".gitignore"
     lines = []
     if gitignore.exists():
         lines = gitignore.read_text().splitlines()
     lines.append("# Child repos managed by repoworktree")
     for path in excludes:
-        lines.append(f"/{path}")
-    gitignore.write_text("\n".join(lines) + "\n")
-
-    # Also exclude .gitignore itself so it doesn't show as untracked
+        pattern = f"/{path}"
+        if pattern not in lines:
+            lines.append(pattern)
     if "/.gitignore" not in lines:
-        with open(gitignore, "a") as f:
-            f.write("/.gitignore\n")
+        lines.append("/.gitignore")
+    gitignore.write_text("\n".join(lines) + "\n")
 
 
 def _collect_non_worktree_repo_paths(node: TrieNode, prefix: str, result: list[str]) -> None:
