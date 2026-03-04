@@ -51,7 +51,8 @@ def _resolve_workspace(args) -> Path:
         if p.is_dir() and (p / ".workspace.json").exists():
             return p
         # Try finding by name in source index
-        source_dir = _find_source_root()
+        source_hint = getattr(args, "source", None)
+        source_dir = _find_source_root(source_hint)
         if source_dir:
             index = load_workspace_index(source_dir)
             entry = index.find_by_name(target)
@@ -189,7 +190,7 @@ def cmd_destroy(args):
         source_dir = Path(meta.source)
     else:
         # Try finding by name
-        source_dir = _find_source_root()
+        source_dir = _find_source_root(getattr(args, "source", None))
         if source_dir:
             index = load_workspace_index(source_dir)
             entry = index.find_by_name(target)
@@ -565,6 +566,8 @@ def build_parser() -> argparse.ArgumentParser:
     # ── destroy ──
     p_destroy = sub.add_parser("destroy", help="Destroy a workspace")
     p_destroy.add_argument("target", help="Workspace path or name")
+    p_destroy.add_argument("-s", "--source", default=None,
+                           help="Source repo checkout path (for name lookup, default: auto-detect)")
     p_destroy.add_argument("-f", "--force", action="store_true",
                            help="Force destroy even with uncommitted changes")
     p_destroy.set_defaults(func=cmd_destroy)
@@ -581,6 +584,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="Show workspace status")
     p_status.add_argument("target", nargs="?", default=None,
                           help="Workspace path or name (default: current directory)")
+    p_status.add_argument("-s", "--source", default=None,
+                          help="Source repo checkout path (for name lookup, default: auto-detect)")
     p_status.add_argument("--json", action="store_true", dest="json_output",
                           help="Output in JSON format")
     p_status.set_defaults(func=cmd_status)

@@ -84,12 +84,13 @@ rwt create /tmp/ws-release --all --checkout release/v2.0
 ### `rwt destroy` — 销毁工作空间
 
 ```bash
-rwt destroy <path|name> [-f]
+rwt destroy <path|name> [-s source] [-f]
 ```
 
 | 选项 | 说明 |
 |------|------|
 | `<path\|name>` | 工作空间路径或名称 |
+| `-s, --source` | 主 repo checkout 路径（按名称查找时使用，默认：自动检测） |
 | `-f, --force` | 强制销毁，即使有未提交修改 |
 
 ```bash
@@ -153,13 +154,13 @@ rwt list [-s <source>] [--json]
 ### `rwt status` — 查看工作空间详情
 
 ```bash
-rwt status [<path|name>] [--json]
+rwt status [<path|name>] [-s source] [--json]
 ```
 
 ### `rwt sync` — 同步工作空间
 
 ```bash
-rwt sync [--rebase]
+rwt sync [-W workspace] [--rebase]
 ```
 
 主仓库 `repo sync` 后，symlink 自动跟随更新。worktree 需要手动 sync：

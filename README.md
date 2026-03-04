@@ -89,12 +89,13 @@ rwt create /tmp/ws-release --all --checkout release/v2.0
 ### `rwt destroy` — Destroy workspace
 
 ```bash
-rwt destroy <path|name> [-f]
+rwt destroy <path|name> [-s source] [-f]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `<path\|name>` | Workspace path or name |
+| `-s, --source` | Source repo checkout path (for name lookup, default: auto-detect) |
 | `-f, --force` | Force destroy even with uncommitted changes or local commits |
 
 ```bash
@@ -158,13 +159,13 @@ rwt list [-s <source>] [--json]
 ### `rwt status` — Show workspace details
 
 ```bash
-rwt status [<path|name>] [--json]
+rwt status [<path|name>] [-s source] [--json]
 ```
 
 ### `rwt sync` — Sync workspace
 
 ```bash
-rwt sync [--rebase]
+rwt sync [-W workspace] [--rebase]
 ```
 
 After `repo sync` on the main checkout, symlinks follow automatically. Worktrees need manual sync:
