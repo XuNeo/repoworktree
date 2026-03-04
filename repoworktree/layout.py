@@ -43,6 +43,7 @@ def build_workspace(
     trie: RepoTrie,
     branch: str | None = None,
     pin_map: dict[str, str] | None = None,
+    checkout: str | None = None,
 ) -> None:
     """
     Build the workspace directory tree.
@@ -53,12 +54,15 @@ def build_workspace(
         trie: RepoTrie with worktree repos marked.
         branch: Optional branch name for all worktrees.
         pin_map: Optional {repo_path: version} for pinned worktrees.
+        checkout: Optional branch or tag to check out for all worktrees.
+            Acts as a default pin_version; explicit pin_map entries take precedence.
+            Unlike pin_map, this does not mark repos as pinned in metadata.
     """
     pin_map = pin_map or {}
     workspace.mkdir(parents=True, exist_ok=True)
 
     # Process sub-repo tree
-    _build_level(source, workspace, trie.root, source, workspace, branch, pin_map)
+    _build_level(source, workspace, trie.root, source, workspace, branch, pin_map, checkout=checkout)
 
     # Process top-level files
     _process_top_level_files(source, workspace)
@@ -73,6 +77,7 @@ def _build_level(
     branch: str | None,
     pin_map: dict[str, str],
     inside_worktree: bool = False,
+    checkout: str | None = None,
 ) -> None:
     """
     Recursively build one level of the directory tree.
@@ -86,6 +91,8 @@ def _build_level(
     Args:
         inside_worktree: True when recursing inside a parent worktree checkout.
             Controls whether intermediate dirs are created for child repo paths.
+        checkout: Default ref to check out for all worktrees; explicit pin_map entries
+            take precedence.
     """
     for name, child in trie_node.children.items():
         child_source = source / name
@@ -94,7 +101,11 @@ def _build_level(
         if child.is_repo and child.is_worktree:
             # Create git worktree for this repo
             rel_path = str(child_workspace.relative_to(workspace_root))
-            pin = pin_map.get(rel_path)
+            if not child_source.exists():
+                import sys
+                print(f"  Warning: skipping {rel_path} (not present in source checkout)", file=sys.stderr)
+                continue
+            pin = pin_map.get(rel_path) or checkout
             git_worktree_add(child_source, child_workspace, branch=branch, pin_version=pin)
 
             # If this repo has child repos in the trie, recurse to handle them.
@@ -104,7 +115,7 @@ def _build_level(
                 _build_level(
                     child_source, child_workspace, child,
                     source_root, workspace_root, branch, pin_map,
-                    inside_worktree=True,
+                    inside_worktree=True, checkout=checkout,
                 )
                 # Exclude non-worktree child repo paths from git status
                 # so symlinked child repos don't appear as dirty
@@ -121,7 +132,7 @@ def _build_level(
             _build_level(
                 child_source, child_workspace, child,
                 source_root, workspace_root, branch, pin_map,
-                inside_worktree=inside_worktree,
+                inside_worktree=inside_worktree, checkout=checkout,
             )
 
         elif inside_worktree:
@@ -141,7 +152,7 @@ def _build_level(
                 _build_level(
                     child_source, child_workspace, child,
                     source_root, workspace_root, branch, pin_map,
-                    inside_worktree=True,
+                    inside_worktree=True, checkout=checkout,
                 )
             elif child.children and not child_workspace.exists():
                 # Intermediate dir doesn't exist in parent worktree. Create and recurse.
@@ -149,7 +160,7 @@ def _build_level(
                 _build_level(
                     child_source, child_workspace, child,
                     source_root, workspace_root, branch, pin_map,
-                    inside_worktree=True,
+                    inside_worktree=True, checkout=checkout,
                 )
             elif child_source.exists() and not child_workspace.exists():
                 child_workspace.symlink_to(child_source)

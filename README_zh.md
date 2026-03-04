@@ -52,6 +52,7 @@ rwt create <path> [options]
 | `-w, --worktree` | 逗号分隔的子仓库路径，创建为 git worktree |
 | `--all` | 所有子仓库都创建 git worktree |
 | `-s, --source` | 主 repo checkout 路径（默认：自动检测 `.repo/`） |
+| `--checkout` | 所有 worktree 检出此分支或 tag（默认：source HEAD） |
 | `--pin` | 锁定版本，格式 `repo=version[,repo=version,...]` |
 | `-b, --branch` | 为 worktree 创建命名分支而非 detached HEAD |
 
@@ -75,6 +76,9 @@ rwt create /tmp/ws-full --all
 
 # 锁定版本 + 命名分支
 rwt create /tmp/ws-stable -w nuttx --pin nuttx=v12.0.0 -b feature/new-driver
+
+# 所有 worktree 检出指定分支/tag（不锁定，sync 仍然有效）
+rwt create /tmp/ws-release --all --checkout release/v2.0
 ```
 
 ### `rwt destroy` — 销毁工作空间

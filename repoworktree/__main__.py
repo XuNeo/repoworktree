@@ -45,7 +45,7 @@ def _resolve_source(args) -> Path:
 
 def _resolve_workspace(args) -> Path:
     """Resolve workspace directory from args or auto-detect."""
-    target = getattr(args, "target", None)
+    target = getattr(args, "target", None) or getattr(args, "workspace", None)
     if target:
         p = Path(target)
         if p.is_dir() and (p / ".workspace.json").exists():
@@ -131,12 +131,17 @@ def cmd_create(args):
         print(f"Creating workspace '{name}' at {ws_path}")
         print(f"  Source: {source_dir}")
         print(f"  Worktrees: {len(worktree_set)}/{len(all_repos)} repos")
+        if args.checkout:
+            print(f"  Checkout: {args.checkout}")
 
-        build_workspace(source_dir, tmp_path, trie, branch=args.branch, pin_map=pin_map)
+        build_workspace(source_dir, tmp_path, trie, branch=args.branch, pin_map=pin_map,
+                        checkout=args.checkout)
 
         # Write metadata
         worktree_entries = []
         for repo_path in sorted(worktree_set):
+            if not (source_dir / repo_path).exists():
+                continue  # skipped during build (not present in source checkout)
             worktree_entries.append(WorktreeEntry(
                 path=repo_path,
                 branch=args.branch,
@@ -553,6 +558,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Pin versions: repo=version[,repo=version,...]")
     p_create.add_argument("-b", "--branch", default=None,
                           help="Create named branch for worktrees instead of detached HEAD")
+    p_create.add_argument("--checkout", default=None, metavar="REF",
+                          help="Check out this branch or tag for all worktrees (default: source HEAD)")
     p_create.set_defaults(func=cmd_create)
 
     # ── destroy ──
@@ -582,6 +589,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_promote = sub.add_parser("promote",
                                help="Promote a sub-repo from symlink to worktree")
     p_promote.add_argument("repo_path", help="Sub-repo path (e.g. nuttx, frameworks/system/core)")
+    p_promote.add_argument("-W", "--workspace", default=None,
+                           help="Workspace path or name (default: auto-detect from CWD)")
     p_promote.add_argument("--pin", default=None,
                            help="Checkout to specific version")
     p_promote.add_argument("-b", "--branch", default=None,
@@ -592,12 +601,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_demote = sub.add_parser("demote",
                               help="Demote a sub-repo from worktree to symlink")
     p_demote.add_argument("repo_path", help="Sub-repo path")
+    p_demote.add_argument("-W", "--workspace", default=None,
+                          help="Workspace path or name (default: auto-detect from CWD)")
     p_demote.add_argument("-f", "--force", action="store_true",
                           help="Force demote even with uncommitted changes")
     p_demote.set_defaults(func=cmd_demote)
 
     # ── sync ──
     p_sync = sub.add_parser("sync", help="Sync workspace worktrees to latest")
+    p_sync.add_argument("-W", "--workspace", default=None,
+                        help="Workspace path or name (default: auto-detect from CWD)")
     p_sync.add_argument("--rebase", action="store_true",
                         help="Rebase local commits onto latest")
     p_sync.set_defaults(func=cmd_sync)
@@ -607,15 +620,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_pin.add_argument("repo_path", help="Sub-repo path")
     p_pin.add_argument("version", nargs="?", default=None,
                        help="Commit/tag/branch to pin to (default: current HEAD)")
+    p_pin.add_argument("-W", "--workspace", default=None,
+                       help="Workspace path or name (default: auto-detect from CWD)")
     p_pin.set_defaults(func=cmd_pin)
 
     # ── unpin ──
     p_unpin = sub.add_parser("unpin", help="Unpin a sub-repo")
     p_unpin.add_argument("repo_path", help="Sub-repo path")
+    p_unpin.add_argument("-W", "--workspace", default=None,
+                         help="Workspace path or name (default: auto-detect from CWD)")
     p_unpin.set_defaults(func=cmd_unpin)
 
     # ── export ──
     p_export = sub.add_parser("export", help="Export changes from workspace")
+    p_export.add_argument("-W", "--workspace", default=None,
+                          help="Workspace path or name (default: auto-detect from CWD)")
     p_export.add_argument("--format", choices=["patch", "bundle"], default="patch",
                           dest="export_format", help="Export format (default: patch)")
     p_export.add_argument("-o", "--output", default=".",

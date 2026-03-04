@@ -57,6 +57,7 @@ rwt create <path> [options]
 | `-w, --worktree` | Comma-separated sub-repo paths to create as git worktrees |
 | `--all` | Create git worktrees for all sub-repos |
 | `-s, --source` | Main repo checkout path (default: auto-detect `.repo/`) |
+| `--checkout` | Check out this branch or tag for all worktrees (default: source HEAD) |
 | `--pin` | Pin version, format `repo=version[,repo=version,...]` |
 | `-b, --branch` | Create named branch instead of detached HEAD |
 
@@ -80,6 +81,9 @@ rwt create /tmp/ws-full --all
 
 # Pin version + named branch
 rwt create /tmp/ws-stable -w nuttx --pin nuttx=v12.0.0 -b feature/new-driver
+
+# Check out a specific branch/tag for all worktrees (without pinning — sync still works)
+rwt create /tmp/ws-release --all --checkout release/v2.0
 ```
 
 ### `rwt destroy` — Destroy workspace
