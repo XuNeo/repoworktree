@@ -17,19 +17,69 @@ import pytest
 
 # Sub-repo definitions: (bare_repo_name, checkout_path, initial_files)
 REPO_DEFS = [
-    ("nuttx", "nuttx", {"README.md": "# NuttX RTOS", "tools/Unix.mk": "# makefile"}),
-    ("nuttx-fs-fatfs", "nuttx/fs/fatfs", {"README.md": "# FatFS", "fatfs.c": "// fatfs"}),
-    ("apps", "apps", {"README.md": "# Apps", "Makefile": "# apps makefile"}),
+    (
+        "nuttx",
+        "nuttx",
+        {
+            "README.md": "# NuttX RTOS",
+            "tools/Unix.mk": "# makefile",
+            "fs/vfs.c": "// vfs",
+            "fs/inode.c": "// inode",
+            "drivers/note/note_driver.c": "// note driver",
+        },
+    ),
+    (
+        "nuttx-fs-fatfs",
+        "nuttx/fs/fatfs",
+        {"README.md": "# FatFS", "fatfs.c": "// fatfs"},
+    ),
+    (
+        "apps",
+        "apps",
+        {
+            "README.md": "# Apps",
+            "Makefile": "# apps makefile",
+            "system/init.c": "// init",
+        },
+    ),
     ("apps-system-adb", "apps/system/adb", {"README.md": "# ADB", "adb.c": "// adb"}),
-    ("apps-system-core", "apps/system/core", {"README.md": "# Core", "core.c": "// core"}),
-    ("build", "build", {"envsetup.sh": "#!/bin/bash\n# envsetup", "Makefile": "# build"}),
+    (
+        "apps-system-core",
+        "apps/system/core",
+        {"README.md": "# Core", "core.c": "// core"},
+    ),
+    (
+        "build",
+        "build",
+        {"envsetup.sh": "#!/bin/bash\n# envsetup", "Makefile": "# build"},
+    ),
     ("frameworks", "frameworks", {"README.md": "# Frameworks"}),
     ("frameworks-system", "frameworks/system", {"README.md": "# System"}),
-    ("frameworks-system-core", "frameworks/system/core", {"README.md": "# FW Core", "core.c": "// fw core"}),
-    ("frameworks-system-kvdb", "frameworks/system/kvdb", {"README.md": "# KVDB", "kvdb.c": "// kvdb"}),
-    ("frameworks-connectivity", "frameworks/connectivity", {"README.md": "# Connectivity", "bt.c": "// bt"}),
-    ("external-lib-a", "external/lib-a", {"README.md": "# Lib A", "lib_a.c": "// lib a"}),
-    ("external-lib-b", "external/lib-b", {"README.md": "# Lib B", "lib_b.c": "// lib b"}),
+    (
+        "frameworks-system-core",
+        "frameworks/system/core",
+        {"README.md": "# FW Core", "core.c": "// fw core"},
+    ),
+    (
+        "frameworks-system-kvdb",
+        "frameworks/system/kvdb",
+        {"README.md": "# KVDB", "kvdb.c": "// kvdb"},
+    ),
+    (
+        "frameworks-connectivity",
+        "frameworks/connectivity",
+        {"README.md": "# Connectivity", "bt.c": "// bt"},
+    ),
+    (
+        "external-lib-a",
+        "external/lib-a",
+        {"README.md": "# Lib A", "lib_a.c": "// lib a"},
+    ),
+    (
+        "external-lib-b",
+        "external/lib-b",
+        {"README.md": "# Lib B", "lib_b.c": "// lib b"},
+    ),
 ]
 
 # Top-level symlink files to create in source (simulating real vela project)
@@ -49,7 +99,12 @@ def _run(cmd, cwd=None, check=True, env=None):
     if env:
         merged_env.update(env)
     return subprocess.run(
-        cmd, cwd=cwd, check=check, capture_output=True, text=True, env=merged_env,
+        cmd,
+        cwd=cwd,
+        check=check,
+        capture_output=True,
+        text=True,
+        env=merged_env,
     )
 
 
@@ -170,8 +225,15 @@ def repo_env(tmp_path_factory) -> RepoTestEnv:
 
     # repo init + sync
     _run(
-        ["repo", "init", "-u", str(remotes_dir / "manifest.git"),
-         "-b", "master", "--no-repo-verify"],
+        [
+            "repo",
+            "init",
+            "-u",
+            str(remotes_dir / "manifest.git"),
+            "-b",
+            "master",
+            "--no-repo-verify",
+        ],
         cwd=source_dir,
     )
     _run(
@@ -208,12 +270,14 @@ def workspace_dir(repo_env: RepoTestEnv, tmp_path) -> Path:
                 # This is a worktree - read the gitdir to find the source repo
                 content = git_file.read_text().strip()
                 if content.startswith("gitdir:"):
-                    gitdir = content[len("gitdir:"):].strip()
+                    gitdir = content[len("gitdir:") :].strip()
                     # Find the main repo and remove the worktree
                     worktree_path = git_file.parent
                     try:
-                        _git(["worktree", "remove", "--force", str(worktree_path)],
-                             cwd=worktree_path)
+                        _git(
+                            ["worktree", "remove", "--force", str(worktree_path)],
+                            cwd=worktree_path,
+                        )
                     except (subprocess.CalledProcessError, FileNotFoundError):
                         pass
 

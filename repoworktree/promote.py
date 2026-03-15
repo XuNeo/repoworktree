@@ -19,6 +19,7 @@ from repoworktree.worktree import (
     has_local_changes,
     DirtyWorktreeError,
 )
+from repoworktree.layout import _exclude_child_repos
 
 
 def _has_own_changes(worktree_path: Path, child_wts: list) -> bool:
@@ -27,6 +28,7 @@ def _has_own_changes(worktree_path: Path, child_wts: list) -> bool:
     excluding paths that belong to child worktrees.
     """
     from repoworktree.worktree import _git
+
     result = _git(["status", "--porcelain"], cwd=worktree_path)
     if not result.stdout.strip():
         return False
@@ -38,7 +40,7 @@ def _has_own_changes(worktree_path: Path, child_wts: list) -> bool:
         # e.g. if worktree is "apps", child is "apps/system/adb" → relative is "system/adb"
         wt_rel = str(worktree_path.name)
         if cw.path.startswith(wt_rel + "/"):
-            child_prefixes.append(cw.path[len(wt_rel) + 1:])
+            child_prefixes.append(cw.path[len(wt_rel) + 1 :])
         else:
             child_prefixes.append(cw.path)
 
@@ -52,7 +54,8 @@ def _has_own_changes(worktree_path: Path, child_wts: list) -> bool:
         # - filepath IS a child prefix (e.g. "system/adb")
         # - filepath is a PARENT of a child prefix (e.g. "system" when child is "system/adb")
         is_child = any(
-            filepath.startswith(prefix + "/") or filepath == prefix
+            filepath.startswith(prefix + "/")
+            or filepath == prefix
             or prefix.startswith(filepath + "/")
             for prefix in child_prefixes
         )
@@ -102,8 +105,7 @@ def promote(
         raise PromoteError(f"Source repo does not exist: {target_src}")
 
     # Find existing child worktrees inside this repo
-    child_wts = [w for w in meta.worktrees
-                 if w.path.startswith(repo_path + "/")]
+    child_wts = [w for w in meta.worktrees if w.path.startswith(repo_path + "/")]
     child_info = []
     for cw in child_wts:
         child_ws_path = workspace / cw.path
@@ -143,8 +145,19 @@ def promote(
             shutil.rmtree(child_ws_path)
         elif child_ws_path.is_symlink():
             child_ws_path.unlink()
-        git_worktree_add(child_src_path, child_ws_path,
-                         branch=cw.branch, pin_version=cw.pinned)
+        git_worktree_add(
+            child_src_path, child_ws_path, branch=cw.branch, pin_version=cw.pinned
+        )
+
+    # Handle non-worktree child repos: symlink on top and exclude from git
+    _handle_non_worktree_child_repos(
+        workspace,
+        source,
+        repo_path,
+        all_repos,
+        meta,
+        target_ws,
+    )
 
     # Update metadata
     meta.add_worktree(repo_path, branch=branch, pinned=pin_version)
@@ -178,8 +191,11 @@ def demote(
         raise DemoteError(f"Not a worktree directory: {target_ws}")
 
     # Find child worktrees that live inside this repo
-    child_wts = [w for w in meta.worktrees
-                 if w.path != repo_path and w.path.startswith(repo_path + "/")]
+    child_wts = [
+        w
+        for w in meta.worktrees
+        if w.path != repo_path and w.path.startswith(repo_path + "/")
+    ]
 
     # Check for dirty state (ignore child worktree paths in the check)
     if not force:
@@ -222,8 +238,9 @@ def demote(
                 child_ws_path.unlink()
             elif child_ws_path.is_dir():
                 shutil.rmtree(child_ws_path)
-            git_worktree_add(child_src_path, child_ws_path,
-                             branch=cw.branch, pin_version=cw.pinned)
+            git_worktree_add(
+                child_src_path, child_ws_path, branch=cw.branch, pin_version=cw.pinned
+            )
     else:
         # Simple case: just create symlink
         target_ws.symlink_to(target_src)
@@ -233,6 +250,54 @@ def demote(
     # Update metadata
     meta.remove_worktree(repo_path)
     save_workspace_metadata(workspace, meta)
+
+
+def _handle_non_worktree_child_repos(
+    workspace: Path,
+    source: Path,
+    repo_path: str,
+    all_repos: list[str],
+    meta,
+    worktree_path: Path,
+) -> None:
+    """
+    After creating a parent worktree, handle child repos that are NOT worktrees:
+    replace their checkout dirs with symlinks to source and exclude from git.
+    """
+    worktree_set = {w.path for w in meta.worktrees}
+    child_repos = [
+        r for r in all_repos if r.startswith(repo_path + "/") and r not in worktree_set
+    ]
+    if not child_repos:
+        return
+
+    for child_repo in child_repos:
+        rel = child_repo[len(repo_path) + 1 :]
+        child_ws = worktree_path / rel
+        child_src = source / child_repo
+
+        # Ensure intermediate dirs exist
+        child_ws.parent.mkdir(parents=True, exist_ok=True)
+
+        if child_ws.is_symlink():
+            pass  # already a symlink
+        elif child_ws.is_dir():
+            shutil.rmtree(child_ws)
+            child_ws.symlink_to(child_src)
+        elif not child_ws.exists():
+            child_ws.symlink_to(child_src)
+
+    # Build a mini trie for _exclude_child_repos
+    trie = build_trie(all_repos)
+    parent_node = trie.lookup(repo_path)
+    if parent_node and parent_node.children:
+        # Mark worktrees in the trie so they're excluded from the exclude list
+        for w in meta.worktrees:
+            if w.path.startswith(repo_path + "/"):
+                wt_node = trie.lookup(w.path)
+                if wt_node:
+                    wt_node.is_worktree = True
+        _exclude_child_repos(worktree_path, parent_node)
 
 
 def _ensure_path_is_real(
@@ -256,7 +321,7 @@ def _ensure_path_is_real(
     parts = repo_path.split("/")
 
     for i in range(len(parts) - 1):  # Don't process the last part (the target itself)
-        partial = "/".join(parts[:i + 1])
+        partial = "/".join(parts[: i + 1])
         ws_dir = workspace / partial
         src_dir = source / partial
 
@@ -309,13 +374,14 @@ def _rebuild_as_split_dir(
     ws_dir.mkdir(parents=True, exist_ok=True)
 
     # Find which child paths need to remain as real directories
-    child_wt_paths = {w.path for w in meta.worktrees
-                      if w.path.startswith(repo_path + "/")}
+    child_wt_paths = {
+        w.path for w in meta.worktrees if w.path.startswith(repo_path + "/")
+    }
 
     # Get the immediate next path components needed for child worktrees
     needed_subdirs = set()
     for cwp in child_wt_paths:
-        relative = cwp[len(repo_path) + 1:]  # strip "repo_path/"
+        relative = cwp[len(repo_path) + 1 :]  # strip "repo_path/"
         first_part = relative.split("/")[0]
         needed_subdirs.add(first_part)
 
@@ -329,11 +395,15 @@ def _rebuild_as_split_dir(
         sub_src = src_dir / subdir
 
         # Check if any child worktree is directly this subdir
-        direct_child = any(w.path == sub_repo_path for w in meta.worktrees
-                           if w.path in child_wt_paths)
+        direct_child = any(
+            w.path == sub_repo_path for w in meta.worktrees if w.path in child_wt_paths
+        )
         # Check if deeper children exist
-        deeper_children = any(w.path.startswith(sub_repo_path + "/")
-                              for w in meta.worktrees if w.path in child_wt_paths)
+        deeper_children = any(
+            w.path.startswith(sub_repo_path + "/")
+            for w in meta.worktrees
+            if w.path in child_wt_paths
+        )
 
         if direct_child:
             # Will be restored as worktree by caller, leave space
@@ -365,7 +435,9 @@ def _try_collapse_upward(
         parent_src = source / parent_path
 
         # Check if any remaining worktree is under this parent
-        has_wt_below = any(wt.startswith(parent_path + "/") for wt in remaining_wt_paths)
+        has_wt_below = any(
+            wt.startswith(parent_path + "/") for wt in remaining_wt_paths
+        )
 
         if has_wt_below:
             break  # Can't collapse this or any higher parent

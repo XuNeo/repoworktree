@@ -1,16 +1,24 @@
 """Unit tests for repoworktree/promote.py — Promote / Demote."""
 
+import subprocess
+from pathlib import Path
+
 import pytest
 from repoworktree.scanner import scan_repos, build_trie
 from repoworktree.layout import build_workspace, teardown_workspace
 from repoworktree.metadata import (
-    load_workspace_metadata, save_workspace_metadata,
-    create_workspace_metadata, WorktreeEntry,
+    load_workspace_metadata,
+    save_workspace_metadata,
+    create_workspace_metadata,
+    WorktreeEntry,
 )
 from repoworktree.promote import promote, demote, PromoteError, DemoteError
 from repoworktree.worktree import get_head, DirtyWorktreeError
 from tests.helpers import (
-    assert_is_symlink, assert_is_worktree, assert_is_real_dir, make_dirty,
+    assert_is_symlink,
+    assert_is_worktree,
+    assert_is_real_dir,
+    make_dirty,
 )
 
 
@@ -30,7 +38,8 @@ def _create_ws_with_worktrees(repo_env, workspace_dir, wt_set):
     trie = build_trie(paths, worktree_paths=wt_set)
     build_workspace(repo_env.source_dir, workspace_dir, trie)
     meta = create_workspace_metadata(
-        source=str(repo_env.source_dir), name="test",
+        source=str(repo_env.source_dir),
+        name="test",
         worktrees=[WorktreeEntry(p) for p in sorted(wt_set)],
     )
     save_workspace_metadata(workspace_dir, meta)
@@ -169,7 +178,9 @@ def test_demote_top_level(repo_env, workspace_dir):
 
 def test_demote_nested(repo_env, workspace_dir):
     """Demote frameworks/system/core → collapses back to frameworks/ symlink."""
-    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"frameworks/system/core"})
+    paths = _create_ws_with_worktrees(
+        repo_env, workspace_dir, {"frameworks/system/core"}
+    )
 
     assert_is_worktree(workspace_dir / "frameworks" / "system" / "core")
     demote(workspace_dir, repo_env.source_dir, "frameworks/system/core", paths)
@@ -182,7 +193,9 @@ def test_demote_nested(repo_env, workspace_dir):
 
 def test_demote_parent_preserves_child(repo_env, workspace_dir):
     """Demote apps (parent) while apps/system/adb (child) remains worktree."""
-    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps", "apps/system/adb"})
+    paths = _create_ws_with_worktrees(
+        repo_env, workspace_dir, {"apps", "apps/system/adb"}
+    )
 
     assert_is_worktree(workspace_dir / "apps")
     assert_is_worktree(workspace_dir / "apps" / "system" / "adb")
@@ -234,5 +247,95 @@ def test_demote_not_worktree(repo_env, workspace_dir):
 
     with pytest.raises(DemoteError, match="Not a worktree"):
         demote(workspace_dir, repo_env.source_dir, "nuttx", paths)
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+# ── Bug reproduction tests ─────────────────────────────────────────
+
+
+def _git_status_shows_change(worktree_path: Path, rel_file: str) -> bool:
+    """
+    Modify a file in a worktree and check if git status detects it.
+
+    Returns True if git status shows the change (correct behavior),
+    False if the change is invisible (bug: skip-worktree or gitignore hiding it).
+    """
+    fpath = worktree_path / rel_file
+    assert fpath.exists(), f"File does not exist: {fpath}"
+    original = fpath.read_text()
+    fpath.write_text(original + "\n// modified\n")
+
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=worktree_path,
+        capture_output=True,
+        text=True,
+    )
+    visible = any(rel_file in line for line in result.stdout.splitlines())
+
+    # Restore original content
+    fpath.write_text(original)
+    return visible
+
+
+def test_create_worktree_sibling_files_visible_in_git_status(repo_env, workspace_dir):
+    """Bug 1: rwt create -w nuttx — files in fs/ (sibling to child repo fs/fatfs)
+    must be visible to git status.
+
+    _exclude_child_repos should only skip-worktree files inside the child repo
+    (fs/fatfs/), NOT sibling files like fs/vfs.c that live in the parent repo.
+    """
+    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"nuttx"})
+
+    nuttx_ws = workspace_dir / "nuttx"
+    assert_is_worktree(nuttx_ws)
+
+    # fs/vfs.c is tracked by the nuttx repo, NOT by the child repo fs/fatfs.
+    # Modifying it MUST show up in git status.
+    assert _git_status_shows_change(nuttx_ws, "fs/vfs.c"), (
+        "fs/vfs.c change invisible to git status — "
+        "skip-worktree is over-broad, marking sibling files of child repo"
+    )
+
+    # Also verify a top-level file still works
+    assert _git_status_shows_change(nuttx_ws, "README.md"), (
+        "README.md change invisible to git status"
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_worktree_sibling_files_visible_in_git_status(repo_env, workspace_dir):
+    """Bug 2: rwt create + rwt promote nuttx — files in fs/ must be visible
+    to git status after promote.
+
+    promote() must handle non-worktree child repos: symlink them on top of the
+    parent worktree and exclude them from git status, WITHOUT hiding sibling files.
+    """
+    # Step 1: create all-symlink workspace
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    assert_is_symlink(workspace_dir / "nuttx")
+
+    # Step 2: promote nuttx
+    promote(workspace_dir, repo_env.source_dir, "nuttx", paths)
+    nuttx_ws = workspace_dir / "nuttx"
+    assert_is_worktree(nuttx_ws)
+
+    # fs/vfs.c must be visible to git status after promote
+    assert _git_status_shows_change(nuttx_ws, "fs/vfs.c"), (
+        "fs/vfs.c change invisible to git status after promote — "
+        "child repo exclusion missing or over-broad in promote path"
+    )
+
+    # The child repo fs/fatfs should be a symlink (not a plain checkout dir)
+    fatfs_ws = nuttx_ws / "fs" / "fatfs"
+    assert fatfs_ws.exists(), (
+        f"Child repo fs/fatfs should exist after promote (as symlink to source)"
+    )
+    assert fatfs_ws.is_symlink(), (
+        f"Child repo fs/fatfs should be symlinked after promote, "
+        f"got: symlink={fatfs_ws.is_symlink()}, dir={fatfs_ws.is_dir()}"
+    )
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
