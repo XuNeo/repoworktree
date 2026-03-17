@@ -177,7 +177,6 @@ def test_demote_top_level(repo_env, workspace_dir):
 
 
 def test_demote_nested(repo_env, workspace_dir):
-    """Demote frameworks/system/core → collapses back to frameworks/ symlink."""
     paths = _create_ws_with_worktrees(
         repo_env, workspace_dir, {"frameworks/system/core"}
     )
@@ -185,8 +184,9 @@ def test_demote_nested(repo_env, workspace_dir):
     assert_is_worktree(workspace_dir / "frameworks" / "system" / "core")
     demote(workspace_dir, repo_env.source_dir, "frameworks/system/core", paths)
 
-    # Should collapse all the way up to frameworks/ symlink
-    assert_is_symlink(workspace_dir / "frameworks")
+    assert_is_symlink(workspace_dir / "frameworks" / "system" / "core")
+    assert_is_real_dir(workspace_dir / "frameworks")
+    assert_is_real_dir(workspace_dir / "frameworks" / "system")
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
@@ -336,6 +336,67 @@ def test_promote_worktree_sibling_files_visible_in_git_status(repo_env, workspac
     assert fatfs_ws.is_symlink(), (
         f"Child repo fs/fatfs should be symlinked after promote, "
         f"got: symlink={fatfs_ws.is_symlink()}, dir={fatfs_ws.is_dir()}"
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_demote_nested_worktree_not_falsely_dirty(repo_env, workspace_dir):
+    """Issue 2: _has_own_changes uses worktree_path.name which fails for nested repos.
+
+    For nested worktrees, worktree_path.name returns only the last component
+    (e.g. "system") but cw.path contains the full repo path (e.g.
+    "frameworks/system/core") — the prefix strip fails silently, so child dirt
+    is misattributed to the parent.
+
+    Reproduce: frameworks/system + frameworks/system/core both worktrees,
+    dirty child, demote parent without --force.
+    """
+    paths = _create_ws_with_worktrees(
+        repo_env, workspace_dir, {"frameworks/system", "frameworks/system/core"}
+    )
+
+    assert_is_worktree(workspace_dir / "frameworks" / "system")
+    assert_is_worktree(workspace_dir / "frameworks" / "system" / "core")
+
+    make_dirty(
+        workspace_dir / "frameworks" / "system" / "core", filename="child_dirty.txt"
+    )
+
+    demote(workspace_dir, repo_env.source_dir, "frameworks/system", paths)
+
+    assert_is_worktree(workspace_dir / "frameworks" / "system" / "core")
+    meta = load_workspace_metadata(workspace_dir)
+    assert meta.find_worktree("frameworks/system") is None
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_child_updates_parent_exclude(repo_env, workspace_dir):
+    """Issue 3: promoting a child repo should update parent worktree's exclusions.
+
+    When apps is a worktree, child repos like apps/system/adb are excluded
+    via skip-worktree + .gitignore. After promoting adb to its own worktree,
+    the parent's .gitignore should no longer list it.
+    """
+    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps"})
+    apps_ws = workspace_dir / "apps"
+    assert_is_worktree(apps_ws)
+
+    gitignore = apps_ws / ".gitignore"
+    assert gitignore.exists()
+    old_content = gitignore.read_text()
+    assert "/system/adb" in old_content or "/system" in old_content, (
+        f"Expected child repo exclusion in .gitignore, got: {old_content}"
+    )
+
+    promote(workspace_dir, repo_env.source_dir, "apps/system/adb", paths)
+    assert_is_worktree(workspace_dir / "apps" / "system" / "adb")
+
+    new_content = gitignore.read_text()
+    assert "/system/adb" not in new_content, (
+        f"After promoting apps/system/adb, parent .gitignore should no longer "
+        f"exclude /system/adb, got: {new_content}"
     )
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)

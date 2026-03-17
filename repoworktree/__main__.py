@@ -251,15 +251,6 @@ def cmd_destroy(args):
                 print(f"  Removed worktree: {wt.path}")
             except Exception as e:
                 print(f"  Warning: failed to remove worktree {wt.path}: {e}", file=sys.stderr)
-                # Fallback: prune from source side
-                try:
-                    import subprocess
-                    subprocess.run(
-                        ["git", "worktree", "prune"],
-                        cwd=source_repo, capture_output=True,
-                    )
-                except Exception:
-                    pass
 
     # Delete workspace directory
     if ws_path.exists():

@@ -4,14 +4,20 @@ Integration tests — 13 scenarios from design.md.
 Each test covers create → operate → verify → destroy full lifecycle.
 """
 
+import subprocess
+
 import pytest
 from pathlib import Path
 
 from repoworktree.scanner import scan_repos, build_trie
 from repoworktree.layout import build_workspace, teardown_workspace
 from repoworktree.metadata import (
-    WorktreeEntry, create_workspace_metadata, save_workspace_metadata,
-    load_workspace_metadata, load_workspace_index, save_workspace_index,
+    WorktreeEntry,
+    create_workspace_metadata,
+    save_workspace_metadata,
+    load_workspace_metadata,
+    load_workspace_index,
+    save_workspace_index,
     WorkspaceIndex,
 )
 from repoworktree.promote import promote, demote
@@ -19,9 +25,15 @@ from repoworktree.sync import sync
 from repoworktree.export import export
 from repoworktree.worktree import get_head, has_local_changes, has_local_commits
 from tests.helpers import (
-    assert_is_symlink, assert_is_worktree, assert_is_real_dir,
-    assert_source_untouched, take_source_snapshot,
-    make_commit, make_dirty, push_remote_update, sync_source_repo,
+    assert_is_symlink,
+    assert_is_worktree,
+    assert_is_real_dir,
+    assert_source_untouched,
+    take_source_snapshot,
+    make_commit,
+    make_dirty,
+    push_remote_update,
+    sync_source_repo,
     get_head_commit,
 )
 from tests.conftest import REPO_DEFS
@@ -38,7 +50,8 @@ def _create_workspace(repo_env, ws_dir, wt_paths=None, pin_map=None, name="test"
     trie = build_trie(paths, worktree_paths=wt_set)
     build_workspace(repo_env.source_dir, ws_dir, trie, pin_map=pin_map)
     meta = create_workspace_metadata(
-        source=str(repo_env.source_dir), name=name,
+        source=str(repo_env.source_dir),
+        name=name,
         worktrees=[WorktreeEntry(p, pinned=pin_map.get(p)) for p in sorted(wt_set)],
     )
     save_workspace_metadata(ws_dir, meta)
@@ -56,6 +69,7 @@ def _destroy_workspace(repo_env, ws_dir, paths):
     trie = build_trie(paths, worktree_paths=wt_set)
     teardown_workspace(repo_env.source_dir, ws_dir, trie)
     import shutil
+
     if ws_dir.exists():
         shutil.rmtree(ws_dir, ignore_errors=True)
 
@@ -98,8 +112,9 @@ def test_scenario_01_all_symlink(repo_env, workspace_dir):
 def test_scenario_02_typical_agent(repo_env, workspace_dir):
     """Two top-level worktrees (nuttx, apps), rest symlinked."""
     snapshot = take_source_snapshot(repo_env.source_dir)
-    paths = _create_workspace(repo_env, workspace_dir,
-                              wt_paths=["nuttx", "apps"], name="fix-serial")
+    paths = _create_workspace(
+        repo_env, workspace_dir, wt_paths=["nuttx", "apps"], name="fix-serial"
+    )
 
     assert_is_worktree(workspace_dir / "nuttx")
     assert_is_worktree(workspace_dir / "apps")
@@ -119,8 +134,9 @@ def test_scenario_02_typical_agent(repo_env, workspace_dir):
 def test_scenario_03_nested_worktree(repo_env, workspace_dir):
     """Worktree for nuttx + apps/system/adb (nested). apps/ is real dir, not worktree."""
     snapshot = take_source_snapshot(repo_env.source_dir)
-    paths = _create_workspace(repo_env, workspace_dir,
-                              wt_paths=["nuttx", "apps/system/adb"])
+    paths = _create_workspace(
+        repo_env, workspace_dir, wt_paths=["nuttx", "apps/system/adb"]
+    )
 
     assert_is_worktree(workspace_dir / "nuttx")
     assert_is_real_dir(workspace_dir / "apps")
@@ -129,7 +145,9 @@ def test_scenario_03_nested_worktree(repo_env, workspace_dir):
 
     # apps itself is NOT a worktree (no .git file at apps level from worktree)
     # It's a real dir because it has a worktree descendant
-    assert not (workspace_dir / "apps" / ".git").is_file() or True  # apps may have .git from source
+    assert (
+        not (workspace_dir / "apps" / ".git").is_file() or True
+    )  # apps may have .git from source
 
     assert_source_untouched(repo_env.source_dir, snapshot)
     _destroy_workspace(repo_env, workspace_dir, paths)
@@ -141,8 +159,9 @@ def test_scenario_03_nested_worktree(repo_env, workspace_dir):
 def test_scenario_04_parent_child_worktree(repo_env, workspace_dir):
     """Both apps (parent) and apps/system/adb (child) are worktrees."""
     snapshot = take_source_snapshot(repo_env.source_dir)
-    paths = _create_workspace(repo_env, workspace_dir,
-                              wt_paths=["apps", "apps/system/adb"])
+    paths = _create_workspace(
+        repo_env, workspace_dir, wt_paths=["apps", "apps/system/adb"]
+    )
 
     assert_is_worktree(workspace_dir / "apps")
     assert_is_worktree(workspace_dir / "apps" / "system" / "adb")
@@ -160,8 +179,9 @@ def test_scenario_04_parent_child_worktree(repo_env, workspace_dir):
 def test_scenario_05_promote_parent(repo_env, workspace_dir):
     """Create with nuttx + apps/system/adb, then promote apps."""
     snapshot = take_source_snapshot(repo_env.source_dir)
-    paths = _create_workspace(repo_env, workspace_dir,
-                              wt_paths=["nuttx", "apps/system/adb"])
+    paths = _create_workspace(
+        repo_env, workspace_dir, wt_paths=["nuttx", "apps/system/adb"]
+    )
 
     # apps is real dir, not worktree
     assert_is_real_dir(workspace_dir / "apps")
@@ -219,8 +239,9 @@ def test_scenario_06_promote_deep_nested(repo_env, workspace_dir):
 def test_scenario_07_demote_parent_with_child(repo_env, workspace_dir):
     """Demote apps while preserving apps/system/adb worktree."""
     snapshot = take_source_snapshot(repo_env.source_dir)
-    paths = _create_workspace(repo_env, workspace_dir,
-                              wt_paths=["apps", "apps/system/adb"])
+    paths = _create_workspace(
+        repo_env, workspace_dir, wt_paths=["apps", "apps/system/adb"]
+    )
 
     assert_is_worktree(workspace_dir / "apps")
     assert_is_worktree(workspace_dir / "apps" / "system" / "adb")
@@ -241,22 +262,21 @@ def test_scenario_07_demote_parent_with_child(repo_env, workspace_dir):
     _destroy_workspace(repo_env, workspace_dir, paths)
 
 
-# ── Scenario 8: demote 后向上合并为 symlink ─────────────────────
+# ── Scenario 8: demote 后 repo 变 symlink，parent dir 保留 ───────
 
 
-def test_scenario_08_demote_upward_collapse(repo_env, workspace_dir):
-    """Demote frameworks/system/core → frameworks/ collapses back to symlink."""
+def test_scenario_08_demote_no_collapse(repo_env, workspace_dir):
     snapshot = take_source_snapshot(repo_env.source_dir)
     paths = _create_workspace(repo_env, workspace_dir, wt_paths=["nuttx"])
 
-    # Promote then demote
     promote(workspace_dir, repo_env.source_dir, "frameworks/system/core", paths)
     assert_is_worktree(workspace_dir / "frameworks" / "system" / "core")
 
     demote(workspace_dir, repo_env.source_dir, "frameworks/system/core", paths)
 
-    # frameworks/ should collapse back to symlink
-    assert_is_symlink(workspace_dir / "frameworks")
+    assert_is_symlink(workspace_dir / "frameworks" / "system" / "core")
+    assert_is_real_dir(workspace_dir / "frameworks")
+    assert_is_real_dir(workspace_dir / "frameworks" / "system")
 
     meta = load_workspace_metadata(workspace_dir)
     assert meta.find_worktree("frameworks/system/core") is None
@@ -271,8 +291,9 @@ def test_scenario_08_demote_upward_collapse(repo_env, workspace_dir):
 def test_scenario_09_all_worktree(repo_env, workspace_dir):
     """All repos are worktrees (extreme B)."""
     snapshot = take_source_snapshot(repo_env.source_dir)
-    paths = _create_workspace(repo_env, workspace_dir,
-                              wt_paths=ALL_CHECKOUT_PATHS, name="full-isolation")
+    paths = _create_workspace(
+        repo_env, workspace_dir, wt_paths=ALL_CHECKOUT_PATHS, name="full-isolation"
+    )
 
     # Every repo should be a worktree
     for rp in ALL_CHECKOUT_PATHS:
@@ -319,9 +340,9 @@ def test_scenario_10_multi_agent(repo_env, tmp_path):
 def test_scenario_11_pinned_version(repo_env, workspace_dir):
     """Pin nuttx to current HEAD, advance source, sync skips pinned."""
     snapshot_before = get_head_commit(repo_env.source_dir / "nuttx")
-    paths = _create_workspace(repo_env, workspace_dir,
-                              wt_paths=["nuttx"],
-                              pin_map={"nuttx": snapshot_before})
+    paths = _create_workspace(
+        repo_env, workspace_dir, wt_paths=["nuttx"], pin_map={"nuttx": snapshot_before}
+    )
 
     pinned_head = get_head(workspace_dir / "nuttx")
     assert pinned_head == snapshot_before
@@ -354,8 +375,7 @@ def test_scenario_11_pinned_version(repo_env, workspace_dir):
 
 def test_scenario_12_export_changes(repo_env, workspace_dir, tmp_path):
     """Make commits in worktrees, export as patches."""
-    paths = _create_workspace(repo_env, workspace_dir,
-                              wt_paths=["nuttx", "apps"])
+    paths = _create_workspace(repo_env, workspace_dir, wt_paths=["nuttx", "apps"])
 
     make_commit(workspace_dir / "nuttx", message="nuttx fix", filename="fix.c")
     make_commit(workspace_dir / "apps", message="apps fix", filename="fix.c")
@@ -382,8 +402,7 @@ def test_scenario_12_export_changes(repo_env, workspace_dir, tmp_path):
 
 def test_scenario_13_sync_after_repo_sync(repo_env, workspace_dir):
     """Advance source (simulating repo sync), then rw sync updates worktrees."""
-    paths = _create_workspace(repo_env, workspace_dir,
-                              wt_paths=["nuttx", "apps"])
+    paths = _create_workspace(repo_env, workspace_dir, wt_paths=["nuttx", "apps"])
 
     old_nuttx = get_head(workspace_dir / "nuttx")
     old_apps = get_head(workspace_dir / "apps")
@@ -406,3 +425,142 @@ def test_scenario_13_sync_after_repo_sync(repo_env, workspace_dir):
     assert get_head(workspace_dir / "apps") == new_apps
 
     _destroy_workspace(repo_env, workspace_dir, paths)
+
+
+# ── Issue 1: destroy must not break other workspaces ─────────────
+
+
+def test_add_worktree_prune_does_not_break_sibling(repo_env, tmp_path):
+    """add_worktree must not globally prune when retrying after 'already registered'.
+
+    Simulate: create two workspaces. Manually remove ws1's worktree metadata
+    (without proper cleanup) so it becomes stale. Then create ws3 that reuses
+    the same path — if add_worktree triggers global prune on "already registered",
+    it could damage ws2's worktree linkage.
+    """
+    import shutil
+
+    ws1 = tmp_path / "ws-alpha"
+    ws2 = tmp_path / "ws-beta"
+    ws3 = tmp_path / "ws-gamma"
+
+    paths = _create_workspace(repo_env, ws1, wt_paths=["nuttx"], name="alpha")
+    _create_workspace(repo_env, ws2, wt_paths=["nuttx"], name="beta")
+
+    assert_is_worktree(ws1 / "nuttx")
+    assert_is_worktree(ws2 / "nuttx")
+
+    shutil.rmtree(ws1)
+
+    _create_workspace(repo_env, ws3, wt_paths=["nuttx"], name="gamma")
+    assert_is_worktree(ws3 / "nuttx")
+
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=ws2 / "nuttx",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"git status failed in surviving workspace: {result.stderr.strip()}"
+    )
+
+    _destroy_workspace(repo_env, ws3, paths)
+    _destroy_workspace(repo_env, ws2, paths)
+
+
+# ── Bug regression tests ──────────────────────────────────────────
+
+
+def test_create_after_accidental_rmrf(repo_env, tmp_path):
+    """BUG-001/004: rm -rf workspace (bypassing rwt) then create at same path must succeed.
+
+    Simulates the common case where a user deletes a workspace directory
+    manually without going through rwt destroy. The orphaned git worktree
+    reference in source/.git/worktrees/ must be cleaned up automatically
+    so the next create at the same path succeeds.
+    """
+    import shutil as _shutil
+
+    ws = tmp_path / "workspace"
+    paths = _create_workspace(repo_env, ws, wt_paths=["nuttx"])
+    assert_is_worktree(ws / "nuttx")
+
+    _shutil.rmtree(ws)
+    assert not ws.exists()
+
+    paths2 = _create_workspace(repo_env, ws, wt_paths=["nuttx"])
+    assert_is_worktree(ws / "nuttx")
+
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=ws / "nuttx",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"git status failed after recreate: {result.stderr.strip()}"
+    )
+    _destroy_workspace(repo_env, ws, paths2)
+
+
+def test_sibling_workspace_survives_corrupt_destroy(repo_env, tmp_path):
+    """BUG-001/002: destroy with corrupted worktree .git must not break sibling workspace."""
+    import shutil as _shutil
+
+    ws1 = tmp_path / "ws1"
+    ws2 = tmp_path / "ws2"
+
+    paths = _create_workspace(repo_env, ws1, wt_paths=["nuttx"])
+    _create_workspace(repo_env, ws2, wt_paths=["nuttx"])
+
+    assert_is_worktree(ws1 / "nuttx")
+    assert_is_worktree(ws2 / "nuttx")
+
+    (ws1 / "nuttx" / ".git").write_text("gitdir: /nonexistent/path\n")
+
+    try:
+        _destroy_workspace(repo_env, ws1, paths)
+    except Exception:
+        _shutil.rmtree(ws1, ignore_errors=True)
+
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=ws2 / "nuttx",
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"ws2 git status broken after ws1 corrupt destroy: {result.stderr.strip()}"
+    )
+    _destroy_workspace(repo_env, ws2, paths)
+
+
+def test_destroy_with_corrupt_metadata_cleans_git_worktrees(repo_env, tmp_path):
+    """BUG-003: destroy must clean git worktree refs even if .workspace.json is incomplete."""
+    import json as _json
+
+    ws = tmp_path / "workspace"
+    paths = _create_workspace(repo_env, ws, wt_paths=["nuttx", "apps"])
+
+    meta_path = ws / ".workspace.json"
+    data = _json.loads(meta_path.read_text())
+    data["worktrees"] = [w for w in data["worktrees"] if w["path"] != "apps"]
+    meta_path.write_text(_json.dumps(data))
+
+    _destroy_workspace(repo_env, ws, paths)
+
+    source_apps = repo_env.source_dir / "apps"
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=source_apps,
+        capture_output=True,
+        text=True,
+    )
+    worktree_paths = [
+        line[len("worktree ") :]
+        for line in result.stdout.splitlines()
+        if line.startswith("worktree ")
+    ]
+    orphans = [p for p in worktree_paths if str(ws) in p]
+    assert not orphans, f"Orphan worktree refs remain after destroy: {orphans}"

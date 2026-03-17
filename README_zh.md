@@ -143,7 +143,7 @@ rwt demote apps -f    # 丢弃修改
 
 demote 自动处理：
 - 有子 worktree 时保留子 worktree，父目录重建为真实目录 + symlink 结构
-- 无子 worktree 时向上合并，尽可能将父目录恢复为 symlink
+- 无子 worktree 时 repo 本身变为 symlink，父目录保留为真实目录
 
 ### `rwt list` — 列出所有工作空间
 

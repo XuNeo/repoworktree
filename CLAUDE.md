@@ -35,7 +35,7 @@ Key design patterns:
 - **Nested repo handling** (`promote.py`): Parent-child repo pairs (e.g. `apps/` and `apps/system/adb/`) require temporarily removing child worktrees before operating on parent, then restoring. This remove-operate-restore pattern is used in both `promote()` and `demote()`.
 - **Child repo under parent worktree** (`layout.py`): When a parent repo is a worktree, child repos (separate git repos) are NOT included in the git checkout. `_build_level` uses `inside_worktree` flag to create intermediate dirs and symlink child repos on top. `_exclude_child_repos` hides these from git via `skip-worktree` (tracked files) and `.gitignore` (untracked dirs). Note: `info/exclude` doesn't work reliably for worktrees.
 - **Symlink splitting** (`promote.py:_ensure_path_is_real`): Promoting a deep repo like `frameworks/system/core` recursively splits parent symlinks into real directories with symlinked siblings.
-- **Upward collapse** (`promote.py:_try_collapse_upward`): Demoting merges empty parent directories back into symlinks, walking from deepest parent up to top.
+- **No upward collapse**: Demoting leaves parent directories as real dirs. To restore a fully-symlinked workspace, use `rwt destroy` + `rwt create`.
 - **Dual metadata files**: `.workspace.json` (per-workspace config) and `.workspaces.json` (source-root index of all workspaces). Both in `metadata.py`.
 - **Atomic create**: `cmd_create` builds into a `.tmp` directory then renames, with rollback on failure.
 

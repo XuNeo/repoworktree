@@ -22,7 +22,7 @@ from repoworktree.worktree import (
 from repoworktree.layout import _exclude_child_repos
 
 
-def _has_own_changes(worktree_path: Path, child_wts: list) -> bool:
+def _has_own_changes(worktree_path: Path, repo_path: str, child_wts: list) -> bool:
     """
     Check if a worktree has its own uncommitted changes,
     excluding paths that belong to child worktrees.
@@ -33,14 +33,10 @@ def _has_own_changes(worktree_path: Path, child_wts: list) -> bool:
     if not result.stdout.strip():
         return False
 
-    # Get child worktree relative paths
     child_prefixes = []
     for cw in child_wts:
-        # cw.path is absolute like "apps/system/adb", we need relative to worktree
-        # e.g. if worktree is "apps", child is "apps/system/adb" → relative is "system/adb"
-        wt_rel = str(worktree_path.name)
-        if cw.path.startswith(wt_rel + "/"):
-            child_prefixes.append(cw.path[len(wt_rel) + 1 :])
+        if cw.path.startswith(repo_path + "/"):
+            child_prefixes.append(cw.path[len(repo_path) + 1 :])
         else:
             child_prefixes.append(cw.path)
 
@@ -163,6 +159,9 @@ def promote(
     meta.add_worktree(repo_path, branch=branch, pinned=pin_version)
     save_workspace_metadata(workspace, meta)
 
+    # If this repo lives inside a parent worktree, refresh parent's exclude list
+    _refresh_ancestor_excludes(workspace, source, repo_path, all_repos, meta)
+
 
 def demote(
     workspace: Path,
@@ -177,7 +176,6 @@ def demote(
     Handles:
     1. Simple top-level demote → remove worktree, create symlink
     2. Nested demote with child worktrees → rebuild directory structure
-    3. After demote, try to merge parent directories back into symlinks (upward collapse)
     """
     meta = load_workspace_metadata(workspace)
     target_ws = workspace / repo_path
@@ -199,7 +197,7 @@ def demote(
 
     # Check for dirty state (ignore child worktree paths in the check)
     if not force:
-        if _has_own_changes(target_ws, child_wts):
+        if _has_own_changes(target_ws, repo_path, child_wts):
             raise DirtyWorktreeError(
                 f"Worktree has uncommitted changes: {repo_path}\n"
                 f"Use force=True or commit/stash changes first."
@@ -242,14 +240,15 @@ def demote(
                 child_src_path, child_ws_path, branch=cw.branch, pin_version=cw.pinned
             )
     else:
-        # Simple case: just create symlink
         target_ws.symlink_to(target_src)
-        # Try upward collapse
-        _try_collapse_upward(workspace, source, repo_path, all_repos, meta)
 
     # Update metadata
     meta.remove_worktree(repo_path)
     save_workspace_metadata(workspace, meta)
+
+    # If this repo lived inside a parent worktree, refresh parent's exclude list
+    # (the demoted repo is no longer a worktree so must be added back to excludes)
+    _refresh_ancestor_excludes(workspace, source, repo_path, all_repos, meta)
 
 
 def _handle_non_worktree_child_repos(
@@ -298,6 +297,113 @@ def _handle_non_worktree_child_repos(
                 if wt_node:
                     wt_node.is_worktree = True
         _exclude_child_repos(worktree_path, parent_node)
+
+
+def _refresh_ancestor_excludes(
+    workspace: Path,
+    source: Path,
+    repo_path: str,
+    all_repos: list[str],
+    meta,
+) -> None:
+    """Re-generate .gitignore and skip-worktree for any ancestor worktree of repo_path."""
+    worktree_set = {w.path for w in meta.worktrees}
+    parts = repo_path.split("/")
+    for i in range(len(parts) - 1, 0, -1):
+        ancestor = "/".join(parts[:i])
+        if ancestor in worktree_set:
+            ancestor_ws = workspace / ancestor
+            if not ancestor_ws.is_dir() or not (ancestor_ws / ".git").is_file():
+                continue
+            trie = build_trie(all_repos)
+            for w_path in worktree_set:
+                if w_path.startswith(ancestor + "/"):
+                    node = trie.lookup(w_path)
+                    if node:
+                        node.is_worktree = True
+            parent_node = trie.lookup(ancestor)
+            if parent_node and parent_node.children:
+                _rewrite_exclude(ancestor_ws, parent_node)
+            break
+
+
+def _rewrite_exclude(worktree_path: Path, trie_node) -> None:
+    """Rebuild .gitignore and skip-worktree for a worktree from scratch."""
+    import subprocess
+
+    child_repo_paths: list[str] = []
+    intermediate_paths: list[str] = []
+    from repoworktree.layout import _collect_non_worktree_repo_paths
+
+    _collect_non_worktree_repo_paths(
+        trie_node, "", child_repo_paths, intermediate_paths
+    )
+
+    all_exclude_paths = child_repo_paths + intermediate_paths
+
+    # Reset all skip-worktree flags first, then re-apply only for current child repos
+    result = subprocess.run(
+        ["git", "ls-files", "-v"],
+        cwd=worktree_path,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        skip_files = [
+            line[2:] for line in result.stdout.splitlines() if line.startswith("S ")
+        ]
+        if skip_files:
+            subprocess.run(
+                ["git", "update-index", "--no-skip-worktree", "--stdin"],
+                cwd=worktree_path,
+                check=False,
+                capture_output=True,
+                input="\n".join(skip_files) + "\n",
+                text=True,
+            )
+
+    if child_repo_paths:
+        result = subprocess.run(
+            ["git", "ls-files", "--"] + child_repo_paths,
+            cwd=worktree_path,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            subprocess.run(
+                ["git", "update-index", "--skip-worktree", "--stdin"],
+                cwd=worktree_path,
+                check=False,
+                capture_output=True,
+                input=result.stdout,
+                text=True,
+            )
+
+    gitignore = worktree_path / ".gitignore"
+    if all_exclude_paths:
+        lines = ["# Child repos managed by repoworktree"]
+        for path in all_exclude_paths:
+            lines.append(f"/{path}")
+        lines.append("/.gitignore")
+        gitignore.write_text("\n".join(lines) + "\n")
+    elif gitignore.exists():
+        gitignore.unlink()
+        subprocess.run(
+            ["git", "update-index", "--no-skip-worktree", "--", ".gitignore"],
+            cwd=worktree_path,
+            check=False,
+            capture_output=True,
+        )
+        return
+
+    subprocess.run(
+        ["git", "update-index", "--skip-worktree", "--", ".gitignore"],
+        cwd=worktree_path,
+        check=False,
+        capture_output=True,
+    )
 
 
 def _ensure_path_is_real(
@@ -412,37 +518,3 @@ def _rebuild_as_split_dir(
             _rebuild_as_split_dir(workspace, source, sub_repo_path, all_repos, meta)
         else:
             sub_ws.symlink_to(sub_src)
-
-
-def _try_collapse_upward(
-    workspace: Path,
-    source: Path,
-    repo_path: str,
-    all_repos: list[str],
-    meta,
-) -> None:
-    """
-    After demoting a repo, check if parent directories can be collapsed
-    back into symlinks (when no worktrees remain in the subtree).
-    """
-    remaining_wt_paths = {w.path for w in meta.worktrees if w.path != repo_path}
-
-    parts = repo_path.split("/")
-    # Walk from deepest parent up to top
-    for i in range(len(parts) - 1, 0, -1):
-        parent_path = "/".join(parts[:i])
-        parent_ws = workspace / parent_path
-        parent_src = source / parent_path
-
-        # Check if any remaining worktree is under this parent
-        has_wt_below = any(
-            wt.startswith(parent_path + "/") for wt in remaining_wt_paths
-        )
-
-        if has_wt_below:
-            break  # Can't collapse this or any higher parent
-
-        if parent_ws.is_dir() and not parent_ws.is_symlink():
-            # Safe to collapse: remove dir and replace with symlink
-            shutil.rmtree(parent_ws)
-            parent_ws.symlink_to(parent_src)

@@ -148,7 +148,7 @@ rwt demote apps -f    # discard changes
 
 Demote handles nesting automatically:
 - With child worktrees → preserves children, rebuilds parent as real dir + symlink structure
-- Without child worktrees → collapses upward, restoring parent directories to symlinks
+- Without child worktrees → the repo itself becomes a symlink; parent directories remain as real dirs
 
 ### `rwt list` — List all workspaces
 

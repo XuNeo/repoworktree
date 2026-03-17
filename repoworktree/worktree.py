@@ -14,18 +14,24 @@ from pathlib import Path
 
 class WorktreeError(Exception):
     """Error during worktree operation."""
+
     pass
 
 
 class DirtyWorktreeError(WorktreeError):
     """Attempted to remove a worktree with uncommitted changes."""
+
     pass
 
 
 def _git(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
     """Run a git command."""
     return subprocess.run(
-        ["git"] + args, cwd=cwd, check=check, capture_output=True, text=True,
+        ["git"] + args,
+        cwd=cwd,
+        check=check,
+        capture_output=True,
+        text=True,
     )
 
 
@@ -62,8 +68,13 @@ def add_worktree(
         _git(cmd, cwd=source_repo)
     except subprocess.CalledProcessError as e:
         if "already registered worktree" in e.stderr:
-            # Stale worktree reference — prune and retry
-            _git(["worktree", "prune"], cwd=source_repo)
+            # Remove ONLY this worktree entry (not global prune which
+            # could break other workspaces sharing the same source repo).
+            _git(
+                ["worktree", "remove", "--force", str(target_path)],
+                cwd=source_repo,
+                check=False,
+            )
             try:
                 _git(cmd, cwd=source_repo)
                 return
@@ -121,11 +132,11 @@ def list_worktrees(source_repo: Path) -> list[dict[str, str]]:
         if line.startswith("worktree "):
             if current:
                 worktrees.append(current)
-            current = {"path": line[len("worktree "):]}
+            current = {"path": line[len("worktree ") :]}
         elif line.startswith("HEAD "):
-            current["head"] = line[len("HEAD "):]
+            current["head"] = line[len("HEAD ") :]
         elif line.startswith("branch "):
-            current["branch"] = line[len("branch "):]
+            current["branch"] = line[len("branch ") :]
         elif line == "detached":
             current["branch"] = None
 
@@ -151,7 +162,8 @@ def has_local_commits(worktree_path: Path, base_commit: str) -> bool:
     """
     result = _git(
         ["rev-list", "--count", f"{base_commit}..HEAD"],
-        cwd=worktree_path, check=False,
+        cwd=worktree_path,
+        check=False,
     )
     if result.returncode != 0:
         return False
