@@ -207,17 +207,129 @@ elif target_ws.is_dir():
 | BUG-003 | teardown 改用 `git worktree list` 枚举，不依赖 metadata |
 | BUG-004 | 实测已覆盖（targeted remove 处理了 path 不存在的情况） |
 | BUG-005 | promote 在 rmtree 前检查 dirty；新增 `-f/--force` flag |
-| BUG-006 | promote 临时删除 child worktree 前先检查 child 是否 dirty |
-| BUG-007 | demote 临时删除 child worktree 前先检查 child 是否 dirty |
+| BUG-006 | promote 临时删除 child worktree 前先检查 child 是否 dirty（分析确认：child 会被恢复，不需要检查） |
+| BUG-007 | demote 临时删除 child worktree 前先检查 child 是否 dirty（同上） |
 | BUG-008 | metadata load 加 try/except，损坏文件抛明确错误 |
 | BUG-009 | metadata/index 写入改为原子操作（tmp + rename） |
+
+### P1 — 已修复（本次 review）
+
+| Bug | 严重程度 | 修复方案 |
+|-----|---------|---------|
+| BUG-010 | CRITICAL | promote 在 rmtree 前 copytree 备份，add 失败时 move 回来恢复 |
+| BUG-011 | CRITICAL | destroy --force 仍检查 unpushed commits，有则警告继续（不阻止） |
+| BUG-012 | HIGH | destroy --force teardown 警告后只 rmtree 目录，不再破坏孤儿 git 引用 |
+| BUG-013 | HIGH | index 注销移到 `ws_path.exists()` 为 False 之后，防止目录删除失败时 index 丢失记录 |
+| BUG-014 | HIGH | sync _update_to：on named branch 用 reset --hard，detached HEAD 仍用 checkout --detach |
+| BUG-015 | HIGH | _handle_non_worktree_child_repos：is_dir() 前通过 parent worktree 检查 dirty |
 
 ### P2 — 后续
 
 | Bug | 修复方案 |
 |-----|---------|
-| BUG-010 | add_worktree "already registered" 重试更健壮 |
-| BUG-011 | sync 在 named branch worktree 上的行为 |
+| BUG-018 | add_worktree "already registered" 重试：path 不存在时手动清理 .git/worktrees/ 目录 |
+| BUG-019 | sync rebase 冲突 abort 后，用户可能不知道 rebase 被放弃 |
+
+---
+
+## BUG-010 [CRITICAL] promote/demote 无回滚，rmtree 后 add 失败导致数据丢失
+
+**状态**: 未修复  
+**位置**: `promote.py:156` (promote), `promote.py:245` (demote)
+
+promote 序列：
+1. `shutil.rmtree(target_ws)` — 用户目录被删
+2. `git_worktree_add(...)` — 如果失败，目录已被删，用户数据永久丢失
+
+demote 序列：
+1. 临时删除 child worktrees（force）
+2. `git_worktree_remove(target_src, target_ws, force=...)` — 主 worktree 删除
+3. `_rebuild_as_split_dir(...)` — 如果失败，workspace 处于无 worktree 无 symlink 的损坏状态
+4. 恢复 child worktrees — 如果失败，child 的修改已丢失
+
+---
+
+## BUG-011 [CRITICAL] destroy --force 跳过 unpushed commits 检查
+
+**状态**: 未修复  
+**位置**: `__main__.py:239`
+
+```python
+if not args.force:   # ← --force 完全跳过
+    blockers = []
+    for wt in meta.worktrees:
+        if has_local_commits(wt_path, src_head):
+            blockers.append(...)
+```
+
+用户运行 `rwt destroy --force`，本地有 unpushed commits 但没有 uncommitted changes（dirty check 没触发），commits 随 worktree 删除永久丢失，没有任何警告。
+
+---
+
+## BUG-012 [HIGH] destroy --force 在 teardown 警告后仍 rmtree
+
+**状态**: 未修复  
+**位置**: `__main__.py:274-279`
+
+```python
+for w in caught:          # teardown_workspace 发出警告
+    if args.force:
+        shutil.rmtree(ws_path, ignore_errors=True)  # ← 仍然删
+```
+
+teardown 警告意味着某个 worktree remove 失败（git 元数据孤儿），但 --force 还是删了目录。结果：孤儿 git 引用 + 目录被删，状态最差。
+
+---
+
+## BUG-013 [HIGH] destroy index 注销在目录删除前，删除失败后 workspace 成幽灵
+
+**状态**: 未修复  
+**位置**: `__main__.py:281-288`（注销）vs `teardown_workspace` 内部删除顺序
+
+teardown_workspace 成功删目录后，才执行 index 注销。但如果 teardown 抛异常（BUG-001 fix：remove 失败 → 不删目录 → 返回），index 注销代码 `__main__.py:281-288` 仍然会执行（没有在 catch 里），workspace 变成：目录存在但 index 里已删除的"幽灵"状态。
+
+---
+
+## BUG-014 [HIGH] sync 用 checkout --detach，named branch worktree 丢失 branch 引用
+
+**状态**: 未修复  
+**位置**: `sync.py:145`
+
+```python
+_git(["checkout", "--detach", target], cwd=wt_path)
+```
+
+用户在 worktree 里创建了 named branch `feature/my-work`，sync 后变成 detached HEAD，branch 引用从该 worktree 消失（commits 仍在 reflog，但 branch 名消失）。
+
+---
+
+## BUG-015 [HIGH] _handle_non_worktree_child_repos 对 is_dir() 直接 rmtree 无脏检查
+
+**状态**: 未修复  
+**位置**: `promote.py:305-307`
+
+```python
+elif child_ws.is_dir():
+    shutil.rmtree(child_ws)  # ← 无检查
+    child_ws.symlink_to(child_src)
+```
+
+当 child repo 目录是从 git checkout 出来的真实目录（曾经 promote 过再 demote 的 child），用户在里面的改动被静默删除。
+
+---
+
+## BUG-016 [MEDIUM] layout.py _build_level inside_worktree 路径无脏检查
+
+**状态**: 未修复  
+**位置**: `layout.py:184-187`
+
+```python
+import shutil
+shutil.rmtree(child_workspace)      # ← 无检查
+child_workspace.symlink_to(child_source)
+```
+
+仅在 build_workspace 初始创建时触发，此时 workspace 是新建的，正常情况下不会有用户数据。但如果用户意外地在这个路径有内容（罕见），会被静默删除。
 
 ---
 

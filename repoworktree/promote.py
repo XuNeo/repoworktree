@@ -135,6 +135,7 @@ def promote(
 
     # Now target_ws should be either a symlink or a directory
     # If it's a symlink, remove it
+    backup = None
     if target_ws.is_symlink():
         target_ws.unlink()
     elif target_ws.is_dir():
@@ -149,10 +150,19 @@ def promote(
                         f"Directory has uncommitted changes: {repo_path}\n"
                         f"Use force=True or commit/stash changes first."
                     )
+        backup = target_ws.parent / f"{target_ws.name}.rwt-backup"
+        shutil.copytree(target_ws, backup, symlinks=True)
         shutil.rmtree(target_ws)
 
-    # Create git worktree
-    git_worktree_add(target_src, target_ws, branch=branch, pin_version=pin_version)
+    try:
+        git_worktree_add(target_src, target_ws, branch=branch, pin_version=pin_version)
+    except Exception:
+        if backup is not None and backup.exists():
+            shutil.move(str(backup), str(target_ws))
+        raise
+
+    if backup is not None and backup.exists():
+        shutil.rmtree(backup)
 
     # Restore child worktrees on top
     for cw in child_info:
@@ -175,6 +185,7 @@ def promote(
         all_repos,
         meta,
         target_ws,
+        force=force,
     )
 
     # Update metadata
@@ -280,6 +291,7 @@ def _handle_non_worktree_child_repos(
     all_repos: list[str],
     meta,
     worktree_path: Path,
+    force: bool = False,
 ) -> None:
     """
     After creating a parent worktree, handle child repos that are NOT worktrees:
@@ -301,8 +313,16 @@ def _handle_non_worktree_child_repos(
         child_ws.parent.mkdir(parents=True, exist_ok=True)
 
         if child_ws.is_symlink():
-            pass  # already a symlink
+            pass
         elif child_ws.is_dir():
+            parent_wt = _find_parent_worktree(workspace, repo_path, meta)
+            if parent_wt is not None and not force:
+                rel = str(child_ws.relative_to(parent_wt))
+                if _dir_has_changes(parent_wt, rel):
+                    raise DirtyWorktreeError(
+                        f"Directory has uncommitted changes: {child_repo}\n"
+                        f"Use force=True or commit/stash changes first."
+                    )
             shutil.rmtree(child_ws)
             child_ws.symlink_to(child_src)
         elif not child_ws.exists():

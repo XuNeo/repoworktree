@@ -235,57 +235,75 @@ def cmd_destroy(args):
         print(f"Error: Workspace directory does not exist: {ws_path}", file=sys.stderr)
         return 1
 
-    # Check for dirty worktrees unless --force
-    if not args.force:
-        from repoworktree.worktree import has_local_changes, has_local_commits, get_head
+    from repoworktree.worktree import has_local_changes, has_local_commits, get_head
 
-        blockers = []
-        for wt in meta.worktrees:
-            wt_path = ws_path / wt.path
-            src_path = source_dir / wt.path
-            if not wt_path.exists():
-                continue
-            if has_local_changes(wt_path):
-                blockers.append(f"  {wt.path}: uncommitted changes")
-            elif src_path.exists():
-                src_head = get_head(src_path)
-                if has_local_commits(wt_path, src_head):
-                    blockers.append(f"  {wt.path}: unpushed local commits")
-        if blockers:
-            print("Error: Cannot destroy workspace:", file=sys.stderr)
-            for b in blockers:
-                print(b, file=sys.stderr)
+    # Always check for uncommitted changes and unpushed commits.
+    # --force skips the hard block but still shows a warning for unpushed commits.
+    blockers = []
+    warnings_only = []
+    for wt in meta.worktrees:
+        wt_path = ws_path / wt.path
+        src_path = source_dir / wt.path
+        if not wt_path.exists():
+            continue
+        if has_local_changes(wt_path):
+            blockers.append(f"  {wt.path}: uncommitted changes")
+        elif src_path.exists():
+            src_head = get_head(src_path)
+            if has_local_commits(wt_path, src_head):
+                warnings_only.append(f"  {wt.path}: unpushed local commits")
+
+    if blockers and not args.force:
+        print("Error: Cannot destroy workspace:", file=sys.stderr)
+        for b in blockers:
+            print(b, file=sys.stderr)
+        print("Use --force to destroy anyway.", file=sys.stderr)
+        return 1
+
+    if warnings_only:
+        print(
+            "Warning: workspace has unpushed commits (proceeding with --force):"
+            if args.force
+            else "Warning: workspace has unpushed commits:",
+            file=sys.stderr,
+        )
+        for w in warnings_only:
+            print(w, file=sys.stderr)
+        if not args.force:
             print("Use --force to destroy anyway.", file=sys.stderr)
             return 1
 
     print(f"Destroying workspace '{meta.name}' at {ws_path}")
 
-    import warnings
+    import warnings as _warnings
     from repoworktree.layout import teardown_workspace
     from repoworktree.scanner import build_trie
 
     all_repos = scan_repos(source_dir)
     trie = build_trie(all_repos, {w.path for w in meta.worktrees})
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
+    with _warnings.catch_warnings(record=True) as caught:
+        _warnings.simplefilter("always")
         teardown_workspace(source_dir, ws_path, trie)
 
-    for w in caught:
-        if args.force:
-            shutil.rmtree(ws_path, ignore_errors=True)
-        else:
-            print(f"Warning: {w.message}", file=sys.stderr)
+    if caught:
+        print(str(caught[0].message), file=sys.stderr)
+        if not args.force:
+            print(
+                "Use --force to override (will delete directory regardless).",
+                file=sys.stderr,
+            )
             return 1
+        shutil.rmtree(ws_path, ignore_errors=True)
 
-    # Unregister from index
-    if source_dir:
+    # Unregister from index only after workspace directory is gone
+    if source_dir and not ws_path.exists():
         index = load_workspace_index(source_dir)
         try:
             index.unregister(str(ws_path))
             save_workspace_index(source_dir, index)
         except ValueError:
-            pass  # Not in index, that's fine
+            pass
 
     print(f"Done.")
     return 0

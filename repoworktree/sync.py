@@ -140,9 +140,18 @@ def sync(
 
 
 def _update_to(wt_path: Path, repo_path: str, target: str, old_head: str) -> SyncResult:
-    """Update a clean worktree to a target commit."""
+    """Update a clean worktree to a target commit, preserving branch if on one."""
     try:
-        _git(["checkout", "--detach", target], cwd=wt_path)
+        branch_result = _git(
+            ["symbolic-ref", "--short", "HEAD"], cwd=wt_path, check=False
+        )
+        on_branch = branch_result.returncode == 0 and branch_result.stdout.strip()
+
+        if on_branch:
+            _git(["reset", "--hard", target], cwd=wt_path)
+        else:
+            _git(["checkout", "--detach", target], cwd=wt_path)
+
         return SyncResult(
             path=repo_path,
             action="updated",
