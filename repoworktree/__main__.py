@@ -406,6 +406,7 @@ def cmd_status(args):
 def cmd_promote(args):
     """Promote a sub-repo from symlink to worktree."""
     from repoworktree.promote import promote, PromoteError
+    from repoworktree.worktree import DirtyWorktreeError
 
     ws_path = _resolve_workspace(args)
     meta = load_workspace_metadata(ws_path)
@@ -420,9 +421,14 @@ def cmd_promote(args):
             all_repos,
             branch=args.branch,
             pin_version=args.pin,
+            force=getattr(args, "force", False),
         )
         print(f"Promoted {args.repo_path} to worktree.")
         return 0
+    except DirtyWorktreeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        print("Use -f/--force to promote anyway.", file=sys.stderr)
+        return 1
     except PromoteError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -670,6 +676,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_promote.add_argument("--pin", default=None, help="Checkout to specific version")
     p_promote.add_argument("-b", "--branch", default=None, help="Create named branch")
+    p_promote.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Force promote even with uncommitted changes",
+    )
     p_promote.set_defaults(func=cmd_promote)
 
     # ── demote ──

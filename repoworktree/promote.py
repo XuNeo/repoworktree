@@ -69,6 +69,22 @@ class DemoteError(Exception):
     pass
 
 
+def _find_parent_worktree(workspace: Path, repo_path: str, meta) -> Path | None:
+    parts = repo_path.split("/")
+    for i in range(len(parts) - 1, 0, -1):
+        ancestor = "/".join(parts[:i])
+        if meta.find_worktree(ancestor):
+            return workspace / ancestor
+    return None
+
+
+def _dir_has_changes(worktree_root: Path, rel_path: str) -> bool:
+    from repoworktree.worktree import _git
+
+    result = _git(["status", "--porcelain", "--", rel_path], cwd=worktree_root)
+    return bool(result.stdout.strip())
+
+
 def promote(
     workspace: Path,
     source: Path,
@@ -76,6 +92,7 @@ def promote(
     all_repos: list[str],
     branch: str | None = None,
     pin_version: str | None = None,
+    force: bool = False,
 ) -> None:
     """
     Promote a sub-repo from symlink/directory to git worktree.
@@ -108,7 +125,6 @@ def promote(
         child_src_path = source / cw.path
         if child_ws_path.exists() and (child_ws_path / ".git").is_file():
             child_info.append(cw)
-            # Temporarily remove child worktree
             try:
                 git_worktree_remove(child_src_path, child_ws_path, force=True)
             except Exception:
@@ -122,11 +138,17 @@ def promote(
     if target_ws.is_symlink():
         target_ws.unlink()
     elif target_ws.is_dir():
-        # It's a real directory (from a parent worktree or previous split)
-        # If it has a .git file, it's already a worktree — shouldn't happen
         if (target_ws / ".git").is_file():
             raise PromoteError(f"Already a worktree: {repo_path}")
-        # Remove the directory contents (they're from parent worktree or symlinks)
+        if not force:
+            parent_wt = _find_parent_worktree(workspace, repo_path, meta)
+            if parent_wt is not None:
+                rel = str(target_ws.relative_to(parent_wt))
+                if _dir_has_changes(parent_wt, rel):
+                    raise DirtyWorktreeError(
+                        f"Directory has uncommitted changes: {repo_path}\n"
+                        f"Use force=True or commit/stash changes first."
+                    )
         shutil.rmtree(target_ws)
 
     # Create git worktree
@@ -195,7 +217,7 @@ def demote(
         if w.path != repo_path and w.path.startswith(repo_path + "/")
     ]
 
-    # Check for dirty state (ignore child worktree paths in the check)
+    # Check for dirty state: parent own changes + child worktrees
     if not force:
         if _has_own_changes(target_ws, repo_path, child_wts):
             raise DirtyWorktreeError(

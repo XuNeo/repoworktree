@@ -165,9 +165,9 @@ except subprocess.CalledProcessError as e2:
 
 ## BUG-005 [MEDIUM] promote() 中 rmtree 前无脏检查
 
-**状态**: 未修复  
-**严重程度**: 数据丢失（未提交修改被删除）  
-**已有测试**: 无
+**状态**: ✅ 已修复  
+**严重程度**: 数据丢失  
+**已有测试**: 已有 test_demote_dirty_rejected 模式，promote 侧待补充
 
 ### 根因
 
@@ -198,25 +198,26 @@ elif target_ws.is_dir():
 
 按优先级排序：
 
-### P0 — 立即修复
+### P0 — 已修复
 
 | Bug | 修复方案 |
 |-----|---------|
-| BUG-004 | `add_worktree` "already registered" 时：如果 `git worktree remove --force` 失败且 target_path 不存在，扫描 `source/.git/worktrees/` 找到指向 target_path 的引用目录并手动删除，再 retry |
-| BUG-001 | `teardown_workspace` 改为：remove_worktree 失败则记录警告，**不执行** rmtree；提供 `--force` 跳过此检查 |
+| BUG-001 | teardown 不再吞异常；remove 失败时拒绝 rmtree |
+| BUG-002 | add_worktree 改用 targeted remove 替代 global prune |
+| BUG-003 | teardown 改用 `git worktree list` 枚举，不依赖 metadata |
+| BUG-004 | 实测已覆盖（targeted remove 处理了 path 不存在的情况） |
+| BUG-005 | promote 在 rmtree 前检查 dirty；新增 `-f/--force` flag |
+| BUG-006 | promote 临时删除 child worktree 前先检查 child 是否 dirty |
+| BUG-007 | demote 临时删除 child worktree 前先检查 child 是否 dirty |
+| BUG-008 | metadata load 加 try/except，损坏文件抛明确错误 |
+| BUG-009 | metadata/index 写入改为原子操作（tmp + rename） |
 
-### P1 — 近期修复
+### P2 — 后续
 
 | Bug | 修复方案 |
 |-----|---------|
-| BUG-002 | 已部分修复。补充测试：验证 `rm -rf workspace` 后 create 同路径不报错 |
-| BUG-003 | `teardown_workspace` 改为用 `git worktree list` 从 source 侧枚举，过滤路径前缀为 workspace 的引用 |
-
-### P2 — 后续修复
-
-| Bug | 修复方案 |
-|-----|---------|
-| BUG-005 | `promote` 在 rmtree 之前检查目录是否有 untracked/modified 文件 |
+| BUG-010 | add_worktree "already registered" 重试更健壮 |
+| BUG-011 | sync 在 named branch worktree 上的行为 |
 
 ---
 

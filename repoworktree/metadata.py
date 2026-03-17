@@ -106,10 +106,20 @@ def create_workspace_metadata(
     return WorkspaceMetadata(source=source, name=name, created=now, worktrees=worktrees)
 
 
+def _atomic_write(path: Path, text: str) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(text)
+        tmp.replace(path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
 def save_workspace_metadata(workspace_dir: Path, meta: WorkspaceMetadata):
-    """Write .workspace.json to workspace directory."""
+    """Write .workspace.json to workspace directory (atomic)."""
     path = workspace_dir / ".workspace.json"
-    path.write_text(json.dumps(meta.to_dict(), indent=2) + "\n")
+    _atomic_write(path, json.dumps(meta.to_dict(), indent=2) + "\n")
 
 
 def load_workspace_metadata(workspace_dir: Path) -> WorkspaceMetadata:
@@ -117,7 +127,10 @@ def load_workspace_metadata(workspace_dir: Path) -> WorkspaceMetadata:
     path = workspace_dir / ".workspace.json"
     if not path.exists():
         raise FileNotFoundError(f"No .workspace.json found in {workspace_dir}")
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, ValueError) as e:
+        raise ValueError(f"Corrupted .workspace.json in {workspace_dir}: {e}") from e
     return WorkspaceMetadata.from_dict(data)
 
 
@@ -178,11 +191,14 @@ def load_workspace_index(source_dir: Path) -> WorkspaceIndex:
     path = source_dir / ".workspaces.json"
     if not path.exists():
         return WorkspaceIndex()
-    data = json.loads(path.read_text())
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, ValueError):
+        return WorkspaceIndex()
     return WorkspaceIndex.from_dict(data)
 
 
 def save_workspace_index(source_dir: Path, index: WorkspaceIndex):
-    """Write .workspaces.json to source directory."""
+    """Write .workspaces.json to source directory (atomic)."""
     path = source_dir / ".workspaces.json"
-    path.write_text(json.dumps(index.to_dict(), indent=2) + "\n")
+    _atomic_write(path, json.dumps(index.to_dict(), indent=2) + "\n")
