@@ -177,6 +177,22 @@ def cmd_create(args):
         # Rename to final path
         tmp_path.rename(ws_path)
 
+        # After rename, git worktree metadata in source repos still points to
+        # the old tmp path. Run repair to update the back-references so that
+        # git worktree remove / prune work correctly and don't treat these as
+        # stale prunable entries (which would break the workspace on next prune).
+        import subprocess as _sp
+
+        for wt_entry in meta.worktrees:
+            wt_path = ws_path / wt_entry.path
+            src_repo = source_dir / wt_entry.path
+            if wt_path.exists() and (wt_path / ".git").is_file():
+                _sp.run(
+                    ["git", "worktree", "repair", str(wt_path)],
+                    cwd=src_repo,
+                    capture_output=True,
+                )
+
         # Register in source index
         index = load_workspace_index(source_dir)
         index.register(name, str(ws_path), meta.created)
@@ -189,10 +205,15 @@ def cmd_create(args):
         print(f"Error: {e}", file=sys.stderr)
         # Rollback: clean up worktrees and tmp dir
         if tmp_path.exists():
-            try:
-                teardown_workspace(source_dir, tmp_path, trie)
-            except Exception:
-                shutil.rmtree(tmp_path, ignore_errors=True)
+            import warnings as _w
+
+            with _w.catch_warnings(record=True):
+                _w.simplefilter("always")
+                try:
+                    teardown_workspace(source_dir, tmp_path, trie)
+                except Exception:
+                    pass
+            shutil.rmtree(tmp_path, ignore_errors=True)
         return 1
 
 
@@ -429,7 +450,7 @@ def cmd_status(args):
 def cmd_promote(args):
     """Promote a sub-repo from symlink to worktree."""
     from repoworktree.promote import promote, PromoteError
-    from repoworktree.worktree import DirtyWorktreeError
+    from repoworktree.worktree import DirtyWorktreeError, WorktreeError
 
     ws_path = _resolve_workspace(args)
     meta = load_workspace_metadata(ws_path)
@@ -455,12 +476,15 @@ def cmd_promote(args):
     except PromoteError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+    except WorktreeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
 
 def cmd_demote(args):
     """Demote a sub-repo from worktree to symlink."""
     from repoworktree.promote import demote, DemoteError
-    from repoworktree.worktree import DirtyWorktreeError
+    from repoworktree.worktree import DirtyWorktreeError, WorktreeError
 
     ws_path = _resolve_workspace(args)
     meta = load_workspace_metadata(ws_path)
@@ -472,6 +496,9 @@ def cmd_demote(args):
         print(f"Demoted {args.repo_path} to symlink.")
         return 0
     except (DemoteError, DirtyWorktreeError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except WorktreeError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 

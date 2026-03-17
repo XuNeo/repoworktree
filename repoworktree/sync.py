@@ -180,8 +180,7 @@ def _rebase_onto(wt_path: Path, repo_path: str, upstream: str) -> SyncResult:
             new_head=new_head,
         )
     except Exception:
-        # Abort failed rebase
-        _git(["rebase", "--abort"], cwd=wt_path)
+        _git(["rebase", "--abort"], cwd=wt_path, check=False)
         return SyncResult(
             path=repo_path,
             action="skipped",

@@ -151,6 +151,8 @@ def promote(
                         f"Use force=True or commit/stash changes first."
                     )
         backup = target_ws.parent / f"{target_ws.name}.rwt-backup"
+        if backup.exists():
+            shutil.rmtree(backup)
         shutil.copytree(target_ws, backup, symlinks=True)
         shutil.rmtree(target_ws)
 
