@@ -14,7 +14,13 @@ from pathlib import Path
 class TrieNode:
     """A node in the repo path prefix trie."""
 
-    __slots__ = ("name", "children", "is_repo", "is_worktree", "_has_worktree_descendant")
+    __slots__ = (
+        "name",
+        "children",
+        "is_repo",
+        "is_worktree",
+        "_has_worktree_descendant",
+    )
 
     def __init__(self, name: str):
         self.name = name
@@ -115,7 +121,9 @@ def scan_repos(source_dir: Path) -> list[str]:
     return paths
 
 
-def build_trie(repo_paths: list[str], worktree_paths: set[str] | None = None) -> RepoTrie:
+def build_trie(
+    repo_paths: list[str], worktree_paths: set[str] | None = None
+) -> RepoTrie:
     """
     Build a prefix trie from repo paths, optionally marking some as worktrees.
 

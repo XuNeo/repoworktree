@@ -141,13 +141,15 @@ def _create_bare_repo(bare_path: Path, files: dict, branch="master"):
 
 def _create_manifest_repo(bare_path: Path, remotes_dir: Path, branch="master"):
     """Create the manifest bare repo with default.xml."""
-    manifest_xml = textwrap.dedent(f"""\
+    manifest_xml = textwrap.dedent(
+        f"""\
         <?xml version="1.0" encoding="UTF-8"?>
         <manifest>
           <remote name="local" fetch="{remotes_dir}" />
           <default revision="{branch}" remote="local" sync-j="4" />
 
-    """)
+    """
+    )
     for bare_name, checkout_path, _ in REPO_DEFS:
         manifest_xml += f'      <project name="{bare_name}" path="{checkout_path}" />\n'
     manifest_xml += "    </manifest>\n"

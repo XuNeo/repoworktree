@@ -461,9 +461,9 @@ def test_add_worktree_prune_does_not_break_sibling(repo_env, tmp_path):
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, (
-        f"git status failed in surviving workspace: {result.stderr.strip()}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"git status failed in surviving workspace: {result.stderr.strip()}"
 
     _destroy_workspace(repo_env, ws3, paths)
     _destroy_workspace(repo_env, ws2, paths)
@@ -498,9 +498,9 @@ def test_create_after_accidental_rmrf(repo_env, tmp_path):
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, (
-        f"git status failed after recreate: {result.stderr.strip()}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"git status failed after recreate: {result.stderr.strip()}"
     _destroy_workspace(repo_env, ws, paths2)
 
 
@@ -530,9 +530,9 @@ def test_sibling_workspace_survives_corrupt_destroy(repo_env, tmp_path):
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, (
-        f"ws2 git status broken after ws1 corrupt destroy: {result.stderr.strip()}"
-    )
+    assert (
+        result.returncode == 0
+    ), f"ws2 git status broken after ws1 corrupt destroy: {result.stderr.strip()}"
     _destroy_workspace(repo_env, ws2, paths)
 
 

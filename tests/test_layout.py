@@ -25,7 +25,9 @@ def test_all_symlink(repo_env, workspace_dir):
     assert_is_symlink(workspace_dir / "frameworks")
 
     # Symlinks should point to source
-    assert (workspace_dir / "nuttx").resolve() == (repo_env.source_dir / "nuttx").resolve()
+    assert (workspace_dir / "nuttx").resolve() == (
+        repo_env.source_dir / "nuttx"
+    ).resolve()
 
     teardown_workspace(repo_env.source_dir, workspace_dir, trie)
 
@@ -158,7 +160,9 @@ def test_parent_worktree_child_repo_symlinked(repo_env, workspace_dir):
     assert fatfs_ws.exists(), f"Child repo nuttx/fs/fatfs missing from workspace"
     assert_is_symlink(fatfs_ws)
     # Should point to source
-    assert fatfs_ws.resolve() == (repo_env.source_dir / "nuttx" / "fs" / "fatfs").resolve()
+    assert (
+        fatfs_ws.resolve() == (repo_env.source_dir / "nuttx" / "fs" / "fatfs").resolve()
+    )
 
     teardown_workspace(repo_env.source_dir, workspace_dir, trie)
 

@@ -30,9 +30,9 @@ def assert_is_symlink(path: Path, target: Path = None):
     if target is not None:
         actual = path.resolve()
         expected = target.resolve()
-        assert actual == expected, (
-            f"Symlink {path} points to {actual}, expected {expected}"
-        )
+        assert (
+            actual == expected
+        ), f"Symlink {path} points to {actual}, expected {expected}"
 
 
 def assert_is_symlink_to(path: Path, target: Path):
@@ -42,9 +42,9 @@ def assert_is_symlink_to(path: Path, target: Path):
     # Compare as resolved absolute paths
     if not os.path.isabs(actual_target):
         actual_target = str((path.parent / actual_target).resolve())
-    assert Path(actual_target).resolve() == target.resolve(), (
-        f"Symlink {path} -> {actual_target}, expected -> {target}"
-    )
+    assert (
+        Path(actual_target).resolve() == target.resolve()
+    ), f"Symlink {path} -> {actual_target}, expected -> {target}"
 
 
 def assert_is_worktree(path: Path):
@@ -52,13 +52,13 @@ def assert_is_worktree(path: Path):
     git_path = path / ".git"
     assert path.is_dir(), f"Expected directory: {path}"
     assert git_path.exists(), f"No .git entry at: {path}"
-    assert git_path.is_file(), (
-        f"Expected .git to be a file (worktree marker), got directory: {git_path}"
-    )
+    assert (
+        git_path.is_file()
+    ), f"Expected .git to be a file (worktree marker), got directory: {git_path}"
     content = git_path.read_text().strip()
-    assert content.startswith("gitdir:"), (
-        f".git file does not start with 'gitdir:': {content}"
-    )
+    assert content.startswith(
+        "gitdir:"
+    ), f".git file does not start with 'gitdir:': {content}"
 
 
 def assert_is_real_dir(path: Path):
@@ -69,9 +69,9 @@ def assert_is_real_dir(path: Path):
 
 def assert_workspace_clean(workspace_dir: Path, source_dir: Path):
     """Assert workspace has been fully cleaned up."""
-    assert not workspace_dir.exists(), (
-        f"Workspace directory still exists: {workspace_dir}"
-    )
+    assert (
+        not workspace_dir.exists()
+    ), f"Workspace directory still exists: {workspace_dir}"
     # Verify no dangling worktree references in source repos
     for git_dir in source_dir.rglob(".git"):
         if git_dir.is_dir() and (git_dir / "worktrees").is_dir():
@@ -79,9 +79,9 @@ def assert_workspace_clean(workspace_dir: Path, source_dir: Path):
                 gitdir_file = wt / "gitdir"
                 if gitdir_file.exists():
                     target = gitdir_file.read_text().strip()
-                    assert not target.startswith(str(workspace_dir)), (
-                        f"Dangling worktree reference in {wt}: {target}"
-                    )
+                    assert not target.startswith(
+                        str(workspace_dir)
+                    ), f"Dangling worktree reference in {wt}: {target}"
 
 
 def assert_source_untouched(source_dir: Path, snapshot: dict):
@@ -133,25 +133,38 @@ def make_staged(repo_path: Path, filename: str = "staged.txt"):
     _git(["add", str(fpath)], cwd=repo_path)
 
 
-def make_commit(repo_path: Path, message: str = "test commit",
-                filename: str = "committed.txt") -> str:
+def make_commit(
+    repo_path: Path, message: str = "test commit", filename: str = "committed.txt"
+) -> str:
     """Create a commit in a repo. Returns the commit hash."""
     fpath = repo_path / filename
     fpath.write_text(f"committed at {time.time()}\n")
     _git(["add", str(fpath)], cwd=repo_path)
-    _git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
-          "commit", "-m", message], cwd=repo_path)
+    _git(
+        [
+            "-c",
+            "user.email=test@test.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-m",
+            message,
+        ],
+        cwd=repo_path,
+    )
     result = _git(["rev-parse", "HEAD"], cwd=repo_path)
     return result.stdout.strip()
 
 
-def push_remote_update(remote_bare: Path, branch: str = "master",
-                       filename: str = "remote_update.txt") -> str:
+def push_remote_update(
+    remote_bare: Path, branch: str = "master", filename: str = "remote_update.txt"
+) -> str:
     """
     Push a new commit to a bare repo, simulating a remote update.
     Returns the new commit hash.
     """
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmp:
         _run(["git", "clone", str(remote_bare), tmp])
         _git(["config", "user.email", "test@test.com"], cwd=tmp)

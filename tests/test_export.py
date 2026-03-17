@@ -4,8 +4,10 @@ import pytest
 from repoworktree.scanner import scan_repos, build_trie
 from repoworktree.layout import build_workspace, teardown_workspace
 from repoworktree.metadata import (
-    load_workspace_metadata, save_workspace_metadata,
-    create_workspace_metadata, WorktreeEntry,
+    load_workspace_metadata,
+    save_workspace_metadata,
+    create_workspace_metadata,
+    WorktreeEntry,
 )
 from repoworktree.export import export
 from repoworktree.worktree import get_head
@@ -18,7 +20,8 @@ def _create_ws_with_worktrees(repo_env, workspace_dir, wt_set):
     trie = build_trie(paths, worktree_paths=wt_set)
     build_workspace(repo_env.source_dir, workspace_dir, trie)
     meta = create_workspace_metadata(
-        source=str(repo_env.source_dir), name="test",
+        source=str(repo_env.source_dir),
+        name="test",
         worktrees=[WorktreeEntry(p) for p in sorted(wt_set)],
     )
     save_workspace_metadata(workspace_dir, meta)

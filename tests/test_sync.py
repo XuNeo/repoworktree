@@ -4,14 +4,20 @@ import pytest
 from repoworktree.scanner import scan_repos, build_trie
 from repoworktree.layout import build_workspace, teardown_workspace
 from repoworktree.metadata import (
-    load_workspace_metadata, save_workspace_metadata,
-    create_workspace_metadata, WorktreeEntry,
+    load_workspace_metadata,
+    save_workspace_metadata,
+    create_workspace_metadata,
+    WorktreeEntry,
 )
 from repoworktree.sync import sync
 from repoworktree.worktree import get_head
 from tests.helpers import (
-    assert_is_worktree, make_dirty, make_commit,
-    push_remote_update, sync_source_repo, get_head_commit,
+    assert_is_worktree,
+    make_dirty,
+    make_commit,
+    push_remote_update,
+    sync_source_repo,
+    get_head_commit,
 )
 from tests.conftest import REPO_DEFS
 
@@ -26,10 +32,15 @@ def _create_ws_with_worktrees(repo_env, workspace_dir, wt_set, pin_map=None):
     trie = build_trie(paths, worktree_paths=wt_set)
     build_workspace(repo_env.source_dir, workspace_dir, trie, pin_map=pin_map)
     meta = create_workspace_metadata(
-        source=str(repo_env.source_dir), name="test",
-        worktrees=[WorktreeEntry(
-            p, pinned=pin_map.get(p),
-        ) for p in sorted(wt_set)],
+        source=str(repo_env.source_dir),
+        name="test",
+        worktrees=[
+            WorktreeEntry(
+                p,
+                pinned=pin_map.get(p),
+            )
+            for p in sorted(wt_set)
+        ],
     )
     save_workspace_metadata(workspace_dir, meta)
     return paths
@@ -89,7 +100,10 @@ def test_sync_pinned_skipped(repo_env, workspace_dir):
     """Sync a pinned worktree → skipped."""
     pin_commit = get_head(repo_env.source_dir / "nuttx")
     paths = _create_ws_with_worktrees(
-        repo_env, workspace_dir, {"nuttx"}, pin_map={"nuttx": pin_commit},
+        repo_env,
+        workspace_dir,
+        {"nuttx"},
+        pin_map={"nuttx": pin_commit},
     )
 
     _advance_source(repo_env, "nuttx")
@@ -165,7 +179,9 @@ def test_sync_multiple_worktrees(repo_env, workspace_dir):
     """Sync multiple worktrees with mixed states."""
     pin_commit = get_head(repo_env.source_dir / "build")
     paths = _create_ws_with_worktrees(
-        repo_env, workspace_dir, {"nuttx", "apps", "build"},
+        repo_env,
+        workspace_dir,
+        {"nuttx", "apps", "build"},
         pin_map={"build": pin_commit},
     )
 

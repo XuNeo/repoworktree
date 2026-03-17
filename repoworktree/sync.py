@@ -21,9 +21,10 @@ from repoworktree.worktree import get_head, has_local_changes, has_local_commits
 @dataclass
 class SyncResult:
     """Result of syncing a single worktree."""
+
     path: str
-    action: str          # "updated", "rebased", "skipped", "already_up_to_date"
-    reason: str = ""     # why skipped
+    action: str  # "updated", "rebased", "skipped", "already_up_to_date"
+    reason: str = ""  # why skipped
     old_head: str = ""
     new_head: str = ""
 
@@ -31,6 +32,7 @@ class SyncResult:
 @dataclass
 class SyncReport:
     """Aggregate result of syncing all worktrees."""
+
     results: list[SyncResult] = field(default_factory=list)
 
     @property
@@ -67,16 +69,24 @@ def sync(
 
         # Skip if worktree directory doesn't exist or isn't a worktree
         if not wt_path.is_dir() or not (wt_path / ".git").is_file():
-            report.results.append(SyncResult(
-                path=wt.path, action="skipped", reason="worktree not found",
-            ))
+            report.results.append(
+                SyncResult(
+                    path=wt.path,
+                    action="skipped",
+                    reason="worktree not found",
+                )
+            )
             continue
 
         # 1. Pinned: skip
         if wt.pinned:
-            report.results.append(SyncResult(
-                path=wt.path, action="skipped", reason="pinned",
-            ))
+            report.results.append(
+                SyncResult(
+                    path=wt.path,
+                    action="skipped",
+                    reason="pinned",
+                )
+            )
             continue
 
         wt_head = get_head(wt_path)
@@ -84,18 +94,26 @@ def sync(
 
         # 2. Already up to date
         if wt_head == src_head:
-            report.results.append(SyncResult(
-                path=wt.path, action="already_up_to_date",
-                old_head=wt_head, new_head=src_head,
-            ))
+            report.results.append(
+                SyncResult(
+                    path=wt.path,
+                    action="already_up_to_date",
+                    old_head=wt_head,
+                    new_head=src_head,
+                )
+            )
             continue
 
         # 3. Dirty: skip
         if has_local_changes(wt_path):
-            report.results.append(SyncResult(
-                path=wt.path, action="skipped", reason="uncommitted changes",
-                old_head=wt_head,
-            ))
+            report.results.append(
+                SyncResult(
+                    path=wt.path,
+                    action="skipped",
+                    reason="uncommitted changes",
+                    old_head=wt_head,
+                )
+            )
             continue
 
         # 4. Local commits
@@ -104,11 +122,14 @@ def sync(
                 result = _rebase_onto(wt_path, wt.path, src_head)
                 report.results.append(result)
             else:
-                report.results.append(SyncResult(
-                    path=wt.path, action="skipped",
-                    reason="local commits (use --rebase)",
-                    old_head=wt_head,
-                ))
+                report.results.append(
+                    SyncResult(
+                        path=wt.path,
+                        action="skipped",
+                        reason="local commits (use --rebase)",
+                        old_head=wt_head,
+                    )
+                )
             continue
 
         # 5. Clean, no local commits: update to source HEAD
@@ -123,13 +144,17 @@ def _update_to(wt_path: Path, repo_path: str, target: str, old_head: str) -> Syn
     try:
         _git(["checkout", "--detach", target], cwd=wt_path)
         return SyncResult(
-            path=repo_path, action="updated",
-            old_head=old_head, new_head=target,
+            path=repo_path,
+            action="updated",
+            old_head=old_head,
+            new_head=target,
         )
     except Exception as e:
         return SyncResult(
-            path=repo_path, action="skipped",
-            reason=f"update failed: {e}", old_head=old_head,
+            path=repo_path,
+            action="skipped",
+            reason=f"update failed: {e}",
+            old_head=old_head,
         )
 
 
@@ -140,13 +165,17 @@ def _rebase_onto(wt_path: Path, repo_path: str, upstream: str) -> SyncResult:
         _git(["rebase", upstream], cwd=wt_path)
         new_head = get_head(wt_path)
         return SyncResult(
-            path=repo_path, action="rebased",
-            old_head=old_head, new_head=new_head,
+            path=repo_path,
+            action="rebased",
+            old_head=old_head,
+            new_head=new_head,
         )
     except Exception:
         # Abort failed rebase
         _git(["rebase", "--abort"], cwd=wt_path)
         return SyncResult(
-            path=repo_path, action="skipped",
-            reason="rebase conflict", old_head=old_head,
+            path=repo_path,
+            action="skipped",
+            reason="rebase conflict",
+            old_head=old_head,
         )

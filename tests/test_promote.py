@@ -299,9 +299,9 @@ def test_create_worktree_sibling_files_visible_in_git_status(repo_env, workspace
     )
 
     # Also verify a top-level file still works
-    assert _git_status_shows_change(nuttx_ws, "README.md"), (
-        "README.md change invisible to git status"
-    )
+    assert _git_status_shows_change(
+        nuttx_ws, "README.md"
+    ), "README.md change invisible to git status"
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
@@ -330,9 +330,9 @@ def test_promote_worktree_sibling_files_visible_in_git_status(repo_env, workspac
 
     # The child repo fs/fatfs should be a symlink (not a plain checkout dir)
     fatfs_ws = nuttx_ws / "fs" / "fatfs"
-    assert fatfs_ws.exists(), (
-        f"Child repo fs/fatfs should exist after promote (as symlink to source)"
-    )
+    assert (
+        fatfs_ws.exists()
+    ), f"Child repo fs/fatfs should exist after promote (as symlink to source)"
     assert fatfs_ws.is_symlink(), (
         f"Child repo fs/fatfs should be symlinked after promote, "
         f"got: symlink={fatfs_ws.is_symlink()}, dir={fatfs_ws.is_dir()}"
@@ -386,9 +386,9 @@ def test_promote_child_updates_parent_exclude(repo_env, workspace_dir):
     gitignore = apps_ws / ".gitignore"
     assert gitignore.exists()
     old_content = gitignore.read_text()
-    assert "/system/adb" in old_content or "/system" in old_content, (
-        f"Expected child repo exclusion in .gitignore, got: {old_content}"
-    )
+    assert (
+        "/system/adb" in old_content or "/system" in old_content
+    ), f"Expected child repo exclusion in .gitignore, got: {old_content}"
 
     promote(workspace_dir, repo_env.source_dir, "apps/system/adb", paths)
     assert_is_worktree(workspace_dir / "apps" / "system" / "adb")

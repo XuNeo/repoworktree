@@ -36,8 +36,13 @@ class WorkspaceMetadata:
 
     VERSION = 1
 
-    def __init__(self, source: str, name: str, created: str,
-                 worktrees: list[WorktreeEntry] | None = None):
+    def __init__(
+        self,
+        source: str,
+        name: str,
+        created: str,
+        worktrees: list[WorktreeEntry] | None = None,
+    ):
         self.source = source
         self.name = name
         self.created = created
@@ -67,7 +72,9 @@ class WorkspaceMetadata:
                 return w
         return None
 
-    def add_worktree(self, path: str, branch: str | None = None, pinned: str | None = None):
+    def add_worktree(
+        self, path: str, branch: str | None = None, pinned: str | None = None
+    ):
         if self.find_worktree(path):
             raise ValueError(f"Worktree already exists: {path}")
         self.worktrees.append(WorktreeEntry(path, branch, pinned))
@@ -91,8 +98,9 @@ class WorkspaceMetadata:
         entry.pinned = None
 
 
-def create_workspace_metadata(source: str, name: str,
-                              worktrees: list[WorktreeEntry] | None = None) -> WorkspaceMetadata:
+def create_workspace_metadata(
+    source: str, name: str, worktrees: list[WorktreeEntry] | None = None
+) -> WorkspaceMetadata:
     """Create a new WorkspaceMetadata with current timestamp."""
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     return WorkspaceMetadata(source=source, name=name, created=now, worktrees=worktrees)

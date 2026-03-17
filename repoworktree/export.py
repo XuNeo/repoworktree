@@ -18,8 +18,9 @@ from repoworktree.worktree import get_head, has_local_commits, _git
 @dataclass
 class ExportResult:
     """Result of exporting a single worktree."""
+
     path: str
-    action: str       # "exported", "skipped"
+    action: str  # "exported", "skipped"
     reason: str = ""
     output_file: str = ""
     commit_count: int = 0
@@ -28,6 +29,7 @@ class ExportResult:
 @dataclass
 class ExportReport:
     """Aggregate result of exporting all worktrees."""
+
     results: list[ExportResult] = field(default_factory=list)
 
     @property
@@ -66,22 +68,31 @@ def export(
         src_path = source / wt.path
 
         if not wt_path.is_dir() or not (wt_path / ".git").is_file():
-            report.results.append(ExportResult(
-                path=wt.path, action="skipped", reason="worktree not found",
-            ))
+            report.results.append(
+                ExportResult(
+                    path=wt.path,
+                    action="skipped",
+                    reason="worktree not found",
+                )
+            )
             continue
 
         src_head = get_head(src_path)
 
         if not has_local_commits(wt_path, src_head):
-            report.results.append(ExportResult(
-                path=wt.path, action="skipped", reason="no local commits",
-            ))
+            report.results.append(
+                ExportResult(
+                    path=wt.path,
+                    action="skipped",
+                    reason="no local commits",
+                )
+            )
             continue
 
         # Count commits
         count_result = _git(
-            ["rev-list", "--count", f"{src_head}..HEAD"], cwd=wt_path,
+            ["rev-list", "--count", f"{src_head}..HEAD"],
+            cwd=wt_path,
         )
         commit_count = int(count_result.stdout.strip())
 
@@ -89,12 +100,18 @@ def export(
         safe_name = wt.path.replace("/", "-")
 
         if fmt == "patch":
-            result = _export_patch(wt_path, wt.path, safe_name, src_head, output_dir, commit_count)
+            result = _export_patch(
+                wt_path, wt.path, safe_name, src_head, output_dir, commit_count
+            )
         elif fmt == "bundle":
-            result = _export_bundle(wt_path, wt.path, safe_name, src_head, output_dir, commit_count)
+            result = _export_bundle(
+                wt_path, wt.path, safe_name, src_head, output_dir, commit_count
+            )
         else:
             result = ExportResult(
-                path=wt.path, action="skipped", reason=f"unknown format: {fmt}",
+                path=wt.path,
+                action="skipped",
+                reason=f"unknown format: {fmt}",
             )
 
         report.results.append(result)
@@ -103,8 +120,12 @@ def export(
 
 
 def _export_patch(
-    wt_path: Path, repo_path: str, safe_name: str,
-    base: str, output_dir: Path, commit_count: int,
+    wt_path: Path,
+    repo_path: str,
+    safe_name: str,
+    base: str,
+    output_dir: Path,
+    commit_count: int,
 ) -> ExportResult:
     """Export commits as patch files using git format-patch."""
     patch_dir = output_dir / safe_name
@@ -113,19 +134,26 @@ def _export_patch(
     try:
         _git(["format-patch", f"{base}..HEAD", "-o", str(patch_dir)], cwd=wt_path)
         return ExportResult(
-            path=repo_path, action="exported",
-            output_file=str(patch_dir), commit_count=commit_count,
+            path=repo_path,
+            action="exported",
+            output_file=str(patch_dir),
+            commit_count=commit_count,
         )
     except subprocess.CalledProcessError as e:
         return ExportResult(
-            path=repo_path, action="skipped",
+            path=repo_path,
+            action="skipped",
             reason=f"format-patch failed: {e.stderr.strip()}",
         )
 
 
 def _export_bundle(
-    wt_path: Path, repo_path: str, safe_name: str,
-    base: str, output_dir: Path, commit_count: int,
+    wt_path: Path,
+    repo_path: str,
+    safe_name: str,
+    base: str,
+    output_dir: Path,
+    commit_count: int,
 ) -> ExportResult:
     """Export commits as a git bundle."""
     bundle_file = output_dir / f"{safe_name}.bundle"
@@ -133,11 +161,14 @@ def _export_bundle(
     try:
         _git(["bundle", "create", str(bundle_file), f"{base}..HEAD"], cwd=wt_path)
         return ExportResult(
-            path=repo_path, action="exported",
-            output_file=str(bundle_file), commit_count=commit_count,
+            path=repo_path,
+            action="exported",
+            output_file=str(bundle_file),
+            commit_count=commit_count,
         )
     except subprocess.CalledProcessError as e:
         return ExportResult(
-            path=repo_path, action="skipped",
+            path=repo_path,
+            action="skipped",
             reason=f"bundle failed: {e.stderr.strip()}",
         )

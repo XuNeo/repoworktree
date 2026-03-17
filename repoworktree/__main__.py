@@ -38,7 +38,10 @@ def _resolve_source(args) -> Path:
     source = getattr(args, "source", None)
     source_dir = _find_source_root(source)
     if source_dir is None:
-        print("Error: Cannot find repo-managed directory. Use -s/--source to specify.", file=sys.stderr)
+        print(
+            "Error: Cannot find repo-managed directory. Use -s/--source to specify.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     return source_dir
 
@@ -76,7 +79,10 @@ def _parse_pin(pin_str: str | None) -> dict[str, str]:
     for item in pin_str.split(","):
         item = item.strip()
         if "=" not in item:
-            print(f"Error: Invalid pin format: {item}. Expected repo=version.", file=sys.stderr)
+            print(
+                f"Error: Invalid pin format: {item}. Expected repo=version.",
+                file=sys.stderr,
+            )
             sys.exit(1)
         repo, version = item.split("=", 1)
         result[repo.strip()] = version.strip()
@@ -109,7 +115,10 @@ def cmd_create(args):
         # Validate paths
         invalid = worktree_set - set(all_repos)
         if invalid:
-            print(f"Error: Unknown sub-repo paths: {', '.join(sorted(invalid))}", file=sys.stderr)
+            print(
+                f"Error: Unknown sub-repo paths: {', '.join(sorted(invalid))}",
+                file=sys.stderr,
+            )
             return 1
     else:
         worktree_set = set()
@@ -117,7 +126,9 @@ def cmd_create(args):
     # Validate pin targets are in worktree set
     for repo in pin_map:
         if repo not in worktree_set:
-            print(f"Error: Pinned repo '{repo}' is not in worktree list.", file=sys.stderr)
+            print(
+                f"Error: Pinned repo '{repo}' is not in worktree list.", file=sys.stderr
+            )
             return 1
 
     # Build trie
@@ -135,19 +146,27 @@ def cmd_create(args):
         if args.checkout:
             print(f"  Checkout: {args.checkout}")
 
-        build_workspace(source_dir, tmp_path, trie, branch=args.branch, pin_map=pin_map,
-                        checkout=args.checkout)
+        build_workspace(
+            source_dir,
+            tmp_path,
+            trie,
+            branch=args.branch,
+            pin_map=pin_map,
+            checkout=args.checkout,
+        )
 
         # Write metadata
         worktree_entries = []
         for repo_path in sorted(worktree_set):
             if not (source_dir / repo_path).exists():
                 continue  # skipped during build (not present in source checkout)
-            worktree_entries.append(WorktreeEntry(
-                path=repo_path,
-                branch=args.branch,
-                pinned=pin_map.get(repo_path),
-            ))
+            worktree_entries.append(
+                WorktreeEntry(
+                    path=repo_path,
+                    branch=args.branch,
+                    pinned=pin_map.get(repo_path),
+                )
+            )
         meta = create_workspace_metadata(
             source=str(source_dir),
             name=name,
@@ -219,6 +238,7 @@ def cmd_destroy(args):
     # Check for dirty worktrees unless --force
     if not args.force:
         from repoworktree.worktree import has_local_changes, has_local_commits, get_head
+
         blockers = []
         for wt in meta.worktrees:
             wt_path = ws_path / wt.path
@@ -250,7 +270,10 @@ def cmd_destroy(args):
                 remove_worktree(source_repo, wt_path, force=True)
                 print(f"  Removed worktree: {wt.path}")
             except Exception as e:
-                print(f"  Warning: failed to remove worktree {wt.path}: {e}", file=sys.stderr)
+                print(
+                    f"  Warning: failed to remove worktree {wt.path}: {e}",
+                    file=sys.stderr,
+                )
 
     # Delete workspace directory
     if ws_path.exists():
@@ -391,8 +414,14 @@ def cmd_promote(args):
     all_repos = scan_repos(source_dir)
 
     try:
-        promote(ws_path, source_dir, args.repo_path, all_repos,
-                branch=args.branch, pin_version=args.pin)
+        promote(
+            ws_path,
+            source_dir,
+            args.repo_path,
+            all_repos,
+            branch=args.branch,
+            pin_version=args.pin,
+        )
         print(f"Promoted {args.repo_path} to worktree.")
         return 0
     except PromoteError as e:
@@ -516,7 +545,9 @@ def cmd_export(args):
 
     print("Exported:")
     for r in report.exported:
-        print(f"  {r.path:<30s} ({r.commit_count} commit{'s' if r.commit_count != 1 else ''}) → {r.output_file}")
+        print(
+            f"  {r.path:<30s} ({r.commit_count} commit{'s' if r.commit_count != 1 else ''}) → {r.output_file}"
+        )
 
     if report.skipped:
         for r in report.skipped:
@@ -538,103 +569,191 @@ def build_parser() -> argparse.ArgumentParser:
     # ── create ──
     p_create = sub.add_parser("create", help="Create a new workspace")
     p_create.add_argument("path", help="Workspace target path")
-    p_create.add_argument("-n", "--name", default=None,
-                          help="Workspace name (default: directory name)")
-    p_create.add_argument("-w", "--worktree", default=None,
-                          help="Comma-separated sub-repo paths to create as git worktree")
-    p_create.add_argument("--all", action="store_true", dest="all_worktree",
-                          help="Create git worktree for ALL sub-repos")
-    p_create.add_argument("-s", "--source", default=None,
-                          help="Source repo checkout path (default: auto-detect)")
-    p_create.add_argument("--pin", default=None,
-                          help="Pin versions: repo=version[,repo=version,...]")
-    p_create.add_argument("-b", "--branch", default=None,
-                          help="Create named branch for worktrees instead of detached HEAD")
-    p_create.add_argument("--checkout", default=None, metavar="REF",
-                          help="Check out this branch or tag for all worktrees (default: source HEAD)")
+    p_create.add_argument(
+        "-n", "--name", default=None, help="Workspace name (default: directory name)"
+    )
+    p_create.add_argument(
+        "-w",
+        "--worktree",
+        default=None,
+        help="Comma-separated sub-repo paths to create as git worktree",
+    )
+    p_create.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_worktree",
+        help="Create git worktree for ALL sub-repos",
+    )
+    p_create.add_argument(
+        "-s",
+        "--source",
+        default=None,
+        help="Source repo checkout path (default: auto-detect)",
+    )
+    p_create.add_argument(
+        "--pin", default=None, help="Pin versions: repo=version[,repo=version,...]"
+    )
+    p_create.add_argument(
+        "-b",
+        "--branch",
+        default=None,
+        help="Create named branch for worktrees instead of detached HEAD",
+    )
+    p_create.add_argument(
+        "--checkout",
+        default=None,
+        metavar="REF",
+        help="Check out this branch or tag for all worktrees (default: source HEAD)",
+    )
     p_create.set_defaults(func=cmd_create)
 
     # ── destroy ──
     p_destroy = sub.add_parser("destroy", help="Destroy a workspace")
     p_destroy.add_argument("target", help="Workspace path or name")
-    p_destroy.add_argument("-s", "--source", default=None,
-                           help="Source repo checkout path (for name lookup, default: auto-detect)")
-    p_destroy.add_argument("-f", "--force", action="store_true",
-                           help="Force destroy even with uncommitted changes")
+    p_destroy.add_argument(
+        "-s",
+        "--source",
+        default=None,
+        help="Source repo checkout path (for name lookup, default: auto-detect)",
+    )
+    p_destroy.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Force destroy even with uncommitted changes",
+    )
     p_destroy.set_defaults(func=cmd_destroy)
 
     # ── list ──
     p_list = sub.add_parser("list", help="List all workspaces")
-    p_list.add_argument("-s", "--source", default=None,
-                        help="Source repo checkout path (default: auto-detect)")
-    p_list.add_argument("--json", action="store_true", dest="json_output",
-                        help="Output in JSON format")
+    p_list.add_argument(
+        "-s",
+        "--source",
+        default=None,
+        help="Source repo checkout path (default: auto-detect)",
+    )
+    p_list.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output in JSON format"
+    )
     p_list.set_defaults(func=cmd_list)
 
     # ── status ──
     p_status = sub.add_parser("status", help="Show workspace status")
-    p_status.add_argument("target", nargs="?", default=None,
-                          help="Workspace path or name (default: current directory)")
-    p_status.add_argument("-s", "--source", default=None,
-                          help="Source repo checkout path (for name lookup, default: auto-detect)")
-    p_status.add_argument("--json", action="store_true", dest="json_output",
-                          help="Output in JSON format")
+    p_status.add_argument(
+        "target",
+        nargs="?",
+        default=None,
+        help="Workspace path or name (default: current directory)",
+    )
+    p_status.add_argument(
+        "-s",
+        "--source",
+        default=None,
+        help="Source repo checkout path (for name lookup, default: auto-detect)",
+    )
+    p_status.add_argument(
+        "--json", action="store_true", dest="json_output", help="Output in JSON format"
+    )
     p_status.set_defaults(func=cmd_status)
 
     # ── promote ──
-    p_promote = sub.add_parser("promote",
-                               help="Promote a sub-repo from symlink to worktree")
-    p_promote.add_argument("repo_path", help="Sub-repo path (e.g. nuttx, frameworks/system/core)")
-    p_promote.add_argument("-W", "--workspace", default=None,
-                           help="Workspace path or name (default: auto-detect from CWD)")
-    p_promote.add_argument("--pin", default=None,
-                           help="Checkout to specific version")
-    p_promote.add_argument("-b", "--branch", default=None,
-                           help="Create named branch")
+    p_promote = sub.add_parser(
+        "promote", help="Promote a sub-repo from symlink to worktree"
+    )
+    p_promote.add_argument(
+        "repo_path", help="Sub-repo path (e.g. nuttx, frameworks/system/core)"
+    )
+    p_promote.add_argument(
+        "-W",
+        "--workspace",
+        default=None,
+        help="Workspace path or name (default: auto-detect from CWD)",
+    )
+    p_promote.add_argument("--pin", default=None, help="Checkout to specific version")
+    p_promote.add_argument("-b", "--branch", default=None, help="Create named branch")
     p_promote.set_defaults(func=cmd_promote)
 
     # ── demote ──
-    p_demote = sub.add_parser("demote",
-                              help="Demote a sub-repo from worktree to symlink")
+    p_demote = sub.add_parser(
+        "demote", help="Demote a sub-repo from worktree to symlink"
+    )
     p_demote.add_argument("repo_path", help="Sub-repo path")
-    p_demote.add_argument("-W", "--workspace", default=None,
-                          help="Workspace path or name (default: auto-detect from CWD)")
-    p_demote.add_argument("-f", "--force", action="store_true",
-                          help="Force demote even with uncommitted changes")
+    p_demote.add_argument(
+        "-W",
+        "--workspace",
+        default=None,
+        help="Workspace path or name (default: auto-detect from CWD)",
+    )
+    p_demote.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Force demote even with uncommitted changes",
+    )
     p_demote.set_defaults(func=cmd_demote)
 
     # ── sync ──
     p_sync = sub.add_parser("sync", help="Sync workspace worktrees to latest")
-    p_sync.add_argument("-W", "--workspace", default=None,
-                        help="Workspace path or name (default: auto-detect from CWD)")
-    p_sync.add_argument("--rebase", action="store_true",
-                        help="Rebase local commits onto latest")
+    p_sync.add_argument(
+        "-W",
+        "--workspace",
+        default=None,
+        help="Workspace path or name (default: auto-detect from CWD)",
+    )
+    p_sync.add_argument(
+        "--rebase", action="store_true", help="Rebase local commits onto latest"
+    )
     p_sync.set_defaults(func=cmd_sync)
 
     # ── pin ──
     p_pin = sub.add_parser("pin", help="Pin a sub-repo to a specific version")
     p_pin.add_argument("repo_path", help="Sub-repo path")
-    p_pin.add_argument("version", nargs="?", default=None,
-                       help="Commit/tag/branch to pin to (default: current HEAD)")
-    p_pin.add_argument("-W", "--workspace", default=None,
-                       help="Workspace path or name (default: auto-detect from CWD)")
+    p_pin.add_argument(
+        "version",
+        nargs="?",
+        default=None,
+        help="Commit/tag/branch to pin to (default: current HEAD)",
+    )
+    p_pin.add_argument(
+        "-W",
+        "--workspace",
+        default=None,
+        help="Workspace path or name (default: auto-detect from CWD)",
+    )
     p_pin.set_defaults(func=cmd_pin)
 
     # ── unpin ──
     p_unpin = sub.add_parser("unpin", help="Unpin a sub-repo")
     p_unpin.add_argument("repo_path", help="Sub-repo path")
-    p_unpin.add_argument("-W", "--workspace", default=None,
-                         help="Workspace path or name (default: auto-detect from CWD)")
+    p_unpin.add_argument(
+        "-W",
+        "--workspace",
+        default=None,
+        help="Workspace path or name (default: auto-detect from CWD)",
+    )
     p_unpin.set_defaults(func=cmd_unpin)
 
     # ── export ──
     p_export = sub.add_parser("export", help="Export changes from workspace")
-    p_export.add_argument("-W", "--workspace", default=None,
-                          help="Workspace path or name (default: auto-detect from CWD)")
-    p_export.add_argument("--format", choices=["patch", "bundle"], default="patch",
-                          dest="export_format", help="Export format (default: patch)")
-    p_export.add_argument("-o", "--output", default=".",
-                          help="Output directory (default: current directory)")
+    p_export.add_argument(
+        "-W",
+        "--workspace",
+        default=None,
+        help="Workspace path or name (default: auto-detect from CWD)",
+    )
+    p_export.add_argument(
+        "--format",
+        choices=["patch", "bundle"],
+        default="patch",
+        dest="export_format",
+        help="Export format (default: patch)",
+    )
+    p_export.add_argument(
+        "-o",
+        "--output",
+        default=".",
+        help="Output directory (default: current directory)",
+    )
     p_export.set_defaults(func=cmd_export)
 
     return parser

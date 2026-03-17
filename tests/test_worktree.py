@@ -15,7 +15,9 @@ from repoworktree.worktree import (
 
 
 def _git(args, cwd):
-    return subprocess.run(["git"] + args, cwd=cwd, check=True, capture_output=True, text=True)
+    return subprocess.run(
+        ["git"] + args, cwd=cwd, check=True, capture_output=True, text=True
+    )
 
 
 def test_add_detached(repo_env, tmp_path):
@@ -156,8 +158,18 @@ def test_has_local_commits(repo_env, tmp_path):
     # Make a commit in the worktree
     (target / "committed.txt").write_text("committed")
     _git(["add", "committed.txt"], cwd=target)
-    _git(["-c", "user.email=test@test.com", "-c", "user.name=Test",
-          "commit", "-m", "local commit"], cwd=target)
+    _git(
+        [
+            "-c",
+            "user.email=test@test.com",
+            "-c",
+            "user.name=Test",
+            "commit",
+            "-m",
+            "local commit",
+        ],
+        cwd=target,
+    )
 
     assert has_local_commits(target, base)
 

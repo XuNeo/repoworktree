@@ -38,8 +38,9 @@ def test_create_workspace_json(tmp_path):
 
 def test_read_workspace_json(tmp_path):
     """Read back a previously written .workspace.json."""
-    meta = create_workspace_metadata(source="/src", name="ws1",
-                                     worktrees=[WorktreeEntry("nuttx", branch="fix")])
+    meta = create_workspace_metadata(
+        source="/src", name="ws1", worktrees=[WorktreeEntry("nuttx", branch="fix")]
+    )
     save_workspace_metadata(tmp_path, meta)
 
     loaded = load_workspace_metadata(tmp_path)
@@ -67,7 +68,8 @@ def test_add_worktree_entry(tmp_path):
 def test_remove_worktree_entry(tmp_path):
     """Removing a worktree entry updates the metadata."""
     meta = create_workspace_metadata(
-        source="/src", name="ws1",
+        source="/src",
+        name="ws1",
         worktrees=[WorktreeEntry("nuttx"), WorktreeEntry("apps")],
     )
     meta.remove_worktree("nuttx")
@@ -83,7 +85,8 @@ def test_remove_worktree_entry(tmp_path):
 def test_pin_worktree(tmp_path):
     """Pin sets the pinned field on a worktree entry."""
     meta = create_workspace_metadata(
-        source="/src", name="ws1",
+        source="/src",
+        name="ws1",
         worktrees=[WorktreeEntry("nuttx")],
     )
     assert meta.find_worktree("nuttx").pinned is None
@@ -95,7 +98,8 @@ def test_pin_worktree(tmp_path):
 def test_unpin_worktree(tmp_path):
     """Unpin clears the pinned field."""
     meta = create_workspace_metadata(
-        source="/src", name="ws1",
+        source="/src",
+        name="ws1",
         worktrees=[WorktreeEntry("nuttx", pinned="v12.0.0")],
     )
     meta.unpin_worktree("nuttx")
