@@ -204,3 +204,46 @@ def test_sync_multiple_worktrees(repo_env, workspace_dir):
     assert results["build"].reason == "pinned"
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_sync_preserves_named_branch(repo_env, workspace_dir):
+    """BUG-014: sync must not detach HEAD if worktree is on a named branch."""
+    import subprocess as _subprocess
+
+    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"nuttx"})
+    nuttx_ws = workspace_dir / "nuttx"
+
+    _subprocess.run(
+        ["git", "checkout", "-b", "feature/my-work"],
+        cwd=nuttx_ws,
+        check=True,
+        capture_output=True,
+    )
+
+    branch_before = _subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=nuttx_ws,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert branch_before == "feature/my-work"
+
+    new_src_head = _advance_source(repo_env, "nuttx")
+    sync(workspace_dir, repo_env.source_dir)
+
+    branch_after = _subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=nuttx_ws,
+        check=False,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert branch_after == "feature/my-work", (
+        f"sync must not detach HEAD; expected branch feature/my-work, got {branch_after!r}"
+    )
+    assert get_head(nuttx_ws) == new_src_head, (
+        "worktree must be at new source HEAD after sync"
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)

@@ -267,7 +267,11 @@ def workspace_dir(repo_env: RepoTestEnv, tmp_path) -> Path:
     # Cleanup: remove any git worktrees that were created
     if ws_dir.exists():
         # Find all .git files (worktree markers) and remove them properly
-        for git_file in ws_dir.rglob(".git"):
+        try:
+            git_files = list(ws_dir.rglob(".git"))
+        except (FileNotFoundError, PermissionError):
+            git_files = []
+        for git_file in git_files:
             if git_file.is_file():
                 # This is a worktree - read the gitdir to find the source repo
                 content = git_file.read_text().strip()

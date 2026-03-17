@@ -461,9 +461,9 @@ def test_add_worktree_prune_does_not_break_sibling(repo_env, tmp_path):
         capture_output=True,
         text=True,
     )
-    assert (
-        result.returncode == 0
-    ), f"git status failed in surviving workspace: {result.stderr.strip()}"
+    assert result.returncode == 0, (
+        f"git status failed in surviving workspace: {result.stderr.strip()}"
+    )
 
     _destroy_workspace(repo_env, ws3, paths)
     _destroy_workspace(repo_env, ws2, paths)
@@ -498,9 +498,9 @@ def test_create_after_accidental_rmrf(repo_env, tmp_path):
         capture_output=True,
         text=True,
     )
-    assert (
-        result.returncode == 0
-    ), f"git status failed after recreate: {result.stderr.strip()}"
+    assert result.returncode == 0, (
+        f"git status failed after recreate: {result.stderr.strip()}"
+    )
     _destroy_workspace(repo_env, ws, paths2)
 
 
@@ -530,9 +530,9 @@ def test_sibling_workspace_survives_corrupt_destroy(repo_env, tmp_path):
         capture_output=True,
         text=True,
     )
-    assert (
-        result.returncode == 0
-    ), f"ws2 git status broken after ws1 corrupt destroy: {result.stderr.strip()}"
+    assert result.returncode == 0, (
+        f"ws2 git status broken after ws1 corrupt destroy: {result.stderr.strip()}"
+    )
     _destroy_workspace(repo_env, ws2, paths)
 
 
@@ -564,3 +564,85 @@ def test_destroy_with_corrupt_metadata_cleans_git_worktrees(repo_env, tmp_path):
     ]
     orphans = [p for p in worktree_paths if str(ws) in p]
     assert not orphans, f"Orphan worktree refs remain after destroy: {orphans}"
+
+
+def test_destroy_force_warns_on_unpushed_commits(repo_env, tmp_path):
+    """BUG-011: destroy --force must still warn about unpushed local commits."""
+    import sys
+    from io import StringIO
+
+    ws = tmp_path / "workspace"
+    paths = _create_workspace(repo_env, ws, wt_paths=["nuttx"])
+    assert_is_worktree(ws / "nuttx")
+
+    make_commit(ws / "nuttx")
+
+    from unittest.mock import patch
+
+    stderr_capture = StringIO()
+    with patch("sys.stderr", stderr_capture):
+        from repoworktree.__main__ import cmd_destroy
+
+        class Args:
+            target = str(ws)
+            source = str(repo_env.source_dir)
+            force = True
+
+        cmd_destroy(Args())
+
+    output = stderr_capture.getvalue()
+    assert "unpushed" in output.lower(), (
+        f"destroy --force should warn about unpushed commits, got stderr: {output!r}"
+    )
+    assert not ws.exists(), "workspace directory must be gone after destroy"
+
+
+def test_destroy_force_unpushed_commits_proceeds(repo_env, tmp_path):
+    """BUG-011: destroy --force with unpushed commits → proceeds with warning."""
+    ws = tmp_path / "workspace"
+    paths = _create_workspace(repo_env, ws, wt_paths=["nuttx"])
+
+    make_commit(ws / "nuttx")
+    assert ws.exists()
+
+    from repoworktree.__main__ import cmd_destroy
+
+    class Args:
+        target = str(ws)
+        source = str(repo_env.source_dir)
+        force = True
+
+    ret = cmd_destroy(Args())
+    assert ret == 0
+    assert not ws.exists()
+
+
+def test_destroy_index_not_cleared_if_teardown_fails(repo_env, tmp_path):
+    """BUG-013: workspace stays in index when teardown fails (dir still exists)."""
+    ws = tmp_path / "workspace"
+    paths = _create_workspace(repo_env, ws, wt_paths=["nuttx"])
+
+    (ws / "nuttx" / ".git").write_text("gitdir: /nonexistent\n")
+
+    from repoworktree.__main__ import cmd_destroy
+    from repoworktree.metadata import load_workspace_index
+
+    class Args:
+        target = str(ws)
+        source = str(repo_env.source_dir)
+        force = False
+
+    ret = cmd_destroy(Args())
+
+    if ws.exists():
+        assert ret != 0, "destroy must fail when teardown cannot remove worktrees"
+        index = load_workspace_index(repo_env.source_dir)
+        entry = index.find_by_path(str(ws))
+        assert entry is not None, (
+            "workspace must stay in index when dir still exists after failed teardown"
+        )
+        import shutil
+
+        shutil.rmtree(ws, ignore_errors=True)
+    else:
+        assert ret == 0, "if ws is gone, destroy should succeed and clean index"

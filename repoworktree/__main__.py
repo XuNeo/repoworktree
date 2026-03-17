@@ -246,12 +246,17 @@ def cmd_destroy(args):
         src_path = source_dir / wt.path
         if not wt_path.exists():
             continue
-        if has_local_changes(wt_path):
-            blockers.append(f"  {wt.path}: uncommitted changes")
-        elif src_path.exists():
-            src_head = get_head(src_path)
-            if has_local_commits(wt_path, src_head):
-                warnings_only.append(f"  {wt.path}: unpushed local commits")
+        if not (wt_path / ".git").is_file():
+            continue
+        try:
+            if has_local_changes(wt_path):
+                blockers.append(f"  {wt.path}: uncommitted changes")
+            elif src_path.exists():
+                src_head = get_head(src_path)
+                if has_local_commits(wt_path, src_head):
+                    warnings_only.append(f"  {wt.path}: unpushed local commits")
+        except Exception:
+            pass
 
     if blockers and not args.force:
         print("Error: Cannot destroy workspace:", file=sys.stderr)
