@@ -6,9 +6,9 @@
 
 ## BUG-001 [CRITICAL] teardown_workspace 静默吞异常导致 git 元数据孤儿
 
-**状态**: 未修复  
+**状态**: ✅ 已修复  
 **严重程度**: 数据丢失  
-**已有测试**: 无
+**已有测试**: `test_sibling_workspace_survives_corrupt_destroy`
 
 ### 根因
 
@@ -97,9 +97,9 @@ shutil.rmtree(workspace)  # ← 无论如何都删目录
 
 ## BUG-003 [HIGH] teardown_workspace 通过 trie 收集 worktree，而不是 metadata
 
-**状态**: 未修复  
+**状态**: ✅ 已修复  
 **严重程度**: 静默数据不一致  
-**已有测试**: 无
+**已有测试**: `test_destroy_with_corrupt_metadata_cleans_git_worktrees`
 
 ### 根因
 

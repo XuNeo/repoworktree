@@ -376,49 +376,88 @@ def teardown_workspace(source: Path, workspace: Path, trie: RepoTrie) -> None:
     git's worktree tracking gets corrupted.
     """
     import shutil
+    import subprocess
     from repoworktree.worktree import remove_worktree
 
-    # Collect worktree paths (deepest first to handle parent-child)
-    worktree_paths = []
-    _collect_worktrees(workspace, trie.root, workspace, worktree_paths)
-    worktree_paths.sort(key=lambda p: len(p[1].parts), reverse=True)
+    # Discover worktrees that belong to this workspace from the source side.
+    # This is more reliable than scanning the trie: it works even when
+    # .workspace.json is incomplete or corrupted (BUG-003).
+    worktrees_to_remove: list[tuple[Path, Path]] = []
+    seen_source_repos: set[Path] = set()
 
-    for source_repo, wt_path in worktree_paths:
+    # Walk trie to find all source repos that could have worktrees
+    source_repos_in_trie: list[Path] = []
+    _collect_source_repos(trie.root, source, source_repos_in_trie)
+
+    workspace_str = str(workspace.resolve())
+
+    for source_repo in source_repos_in_trie:
+        if not source_repo.exists():
+            continue
+        if source_repo in seen_source_repos:
+            continue
+        seen_source_repos.add(source_repo)
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=source_repo,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            continue
+        current_path: str | None = None
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                current_path = line[len("worktree ") :]
+            elif line == "" and current_path:
+                if (
+                    current_path.startswith(workspace_str + "/")
+                    or current_path == workspace_str
+                ):
+                    worktrees_to_remove.append((source_repo, Path(current_path)))
+                current_path = None
+        if current_path and (
+            current_path.startswith(workspace_str + "/")
+            or current_path == workspace_str
+        ):
+            worktrees_to_remove.append((source_repo, Path(current_path)))
+
+    # Sort deepest first (handles parent-child worktree ordering)
+    worktrees_to_remove.sort(key=lambda p: len(p[1].parts), reverse=True)
+
+    failed: list[tuple[Path, Exception]] = []
+    for source_repo, wt_path in worktrees_to_remove:
         try:
             remove_worktree(source_repo, wt_path, force=True)
-        except Exception:
-            pass  # Best effort
+        except Exception as e:
+            failed.append((wt_path, e))
+
+    if failed:
+        msgs = "\n".join(f"  {p}: {e}" for p, e in failed)
+        import warnings
+
+        warnings.warn(
+            f"teardown_workspace: failed to remove {len(failed)} worktree(s):\n{msgs}\n"
+            f"Workspace directory will NOT be deleted to avoid data loss. "
+            f"Run 'rwt destroy --force' to override.",
+            stacklevel=2,
+        )
+        return
 
     if workspace.exists():
         shutil.rmtree(workspace)
 
 
-def _collect_worktrees(
-    workspace: Path,
+def _collect_source_repos(
     trie_node: TrieNode,
-    workspace_root: Path,
-    result: list[tuple[Path, Path]],
+    source_root: Path,
+    result: list[Path],
+    prefix: str = "",
 ) -> None:
-    """Recursively collect (source_repo, worktree_path) pairs."""
-    # We need to find the source from workspace metadata, but for teardown
-    # we can read .workspace.json. For now, find worktrees by checking .git files.
     for name, child in trie_node.children.items():
-        child_ws = workspace / name
-        if child.is_repo and child.is_worktree and child_ws.exists():
-            # Find the source repo from the .git file
-            git_file = child_ws / ".git"
-            if git_file.is_file():
-                content = git_file.read_text().strip()
-                if content.startswith("gitdir:"):
-                    gitdir = content[len("gitdir:") :].strip()
-                    # The gitdir points to .git/worktrees/<name>/
-                    # The source repo is the parent of .git/
-                    gitdir_path = Path(gitdir)
-                    if not gitdir_path.is_absolute():
-                        gitdir_path = (child_ws / gitdir_path).resolve()
-                    # Go up from worktrees/<name>/ to .git/ to repo/
-                    source_repo = gitdir_path.parent.parent.parent
-                    result.append((source_repo, child_ws))
-
-        if child.has_worktree_descendant:
-            _collect_worktrees(child_ws, child, workspace_root, result)
+        child_path = f"{prefix}/{name}" if prefix else name
+        if child.is_repo:
+            result.append(source_root / child_path)
+        if child.children:
+            _collect_source_repos(child, source_root, result, child_path)

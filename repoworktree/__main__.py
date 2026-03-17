@@ -21,7 +21,7 @@ from repoworktree.metadata import (
     detect_workspace,
 )
 from repoworktree.layout import build_workspace, teardown_workspace
-from repoworktree.worktree import remove_worktree, get_head
+from repoworktree.worktree import get_head
 
 
 def _find_source_root(path=None):
@@ -260,24 +260,23 @@ def cmd_destroy(args):
 
     print(f"Destroying workspace '{meta.name}' at {ws_path}")
 
-    # Remove git worktrees (deepest first)
-    sorted_wts = sorted(meta.worktrees, key=lambda w: w.path.count("/"), reverse=True)
-    for wt in sorted_wts:
-        wt_path = ws_path / wt.path
-        source_repo = source_dir / wt.path
-        if wt_path.exists() and (wt_path / ".git").is_file():
-            try:
-                remove_worktree(source_repo, wt_path, force=True)
-                print(f"  Removed worktree: {wt.path}")
-            except Exception as e:
-                print(
-                    f"  Warning: failed to remove worktree {wt.path}: {e}",
-                    file=sys.stderr,
-                )
+    import warnings
+    from repoworktree.layout import teardown_workspace
+    from repoworktree.scanner import build_trie
 
-    # Delete workspace directory
-    if ws_path.exists():
-        shutil.rmtree(ws_path)
+    all_repos = scan_repos(source_dir)
+    trie = build_trie(all_repos, {w.path for w in meta.worktrees})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        teardown_workspace(source_dir, ws_path, trie)
+
+    for w in caught:
+        if args.force:
+            shutil.rmtree(ws_path, ignore_errors=True)
+        else:
+            print(f"Warning: {w.message}", file=sys.stderr)
+            return 1
 
     # Unregister from index
     if source_dir:
