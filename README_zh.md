@@ -244,3 +244,30 @@ git push origin HEAD:refs/for/main    # 直接推送到 Gerrit
 - **worktree 子仓库**：通过 `git worktree add` 创建独立工作副本，有自己的 HEAD、index、工作树，完全隔离
 - **嵌套仓库**：repo 管理的项目中存在父子仓库（如 `apps/` 和 `apps/system/adb/` 是独立 git 仓库）。当子仓库需要 worktree 时，父级 symlink 被拆解为真实目录 + symlink 混合结构，只在通往 worktree 的路径上创建真实目录
 - **元数据**：`.workspace.json` 记录工作空间配置，主目录的 `.workspaces.json` 索引所有工作空间
+
+### 子仓库隔离：sparse-checkout
+
+当父仓库（如 `apps`）是 worktree、子仓库（如 `apps/system/adb`）仍为 symlink 时，需要对父 worktree 中的 git 隐藏子仓库的文件。否则 `git status` 会显示大量虚假变更（tracked 文件被 symlink 替换）。
+
+`rwt` 使用 **git sparse-checkout**（non-cone 模式）从父 worktree 中完全排除子仓库路径。这种方式对用户完全透明——所有标准 git 命令（`git status`、`git diff`、`git commit`）都正常工作，没有隐藏的意外。
+
+```
+父 worktree (apps/)
+├── Makefile          ← 父仓库 tracked 文件，git status/diff 正常可见
+├── system/
+│   ├── init.c        ← 父仓库 tracked 文件，正常可见
+│   ├── adb/          → symlink 指向 source（被 sparse-checkout + .gitignore 排除）
+│   └── core/         → symlink 指向 source（被 sparse-checkout + .gitignore 排除）
+```
+
+**底层机制：**
+
+1. 创建父 worktree 后，`rwt` 启用 sparse-checkout 并排除子仓库路径（如 `!/system/adb/`）
+2. Git 从 working tree 中移除子仓库文件（磁盘上不存在）
+3. `rwt` 在空出的路径上创建指向 source 的 symlink
+4. `.gitignore` 隐藏这些 symlink（它们是 untracked 条目）
+5. 父仓库自身的文件保持完整 tracked 状态——任何编辑都能通过 `git status` 和 `git diff` 正常看到
+
+当子仓库被 promote 为独立 worktree（`rwt promote`）时，sparse-checkout 规则会自动更新。
+
+**要求**：Git ≥ 2.34（2021 年 11 月发布，支持 per-worktree sparse-checkout）。

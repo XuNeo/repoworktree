@@ -250,6 +250,33 @@ git push origin HEAD:refs/for/main
 - **Nested repos**: `repo`-managed projects have parent-child repos (e.g. `apps/` and `apps/system/adb/` are independent git repos). When a child needs a worktree, parent symlinks are split into real directories with symlinked siblings — real directories are only created along the path to the worktree.
 - **Metadata**: `.workspace.json` stores per-workspace config. `.workspaces.json` in the source root indexes all workspaces.
 
+### Child Repo Isolation via sparse-checkout
+
+When a parent repo (e.g. `apps`) is a worktree and has child repos (e.g. `apps/system/adb`) that remain as symlinks, the child repo's files must be hidden from git in the parent worktree. Without this, `git status` would show thousands of spurious changes (tracked files replaced by symlinks).
+
+`rwt` uses **git sparse-checkout** (non-cone mode) to exclude child repo paths from the parent worktree entirely. This approach is fully transparent — all standard git commands (`git status`, `git diff`, `git commit`) work exactly as expected with no hidden surprises.
+
+```
+Parent worktree (apps/)
+├── Makefile          ← tracked by parent git, fully visible to git status/diff
+├── system/
+│   ├── init.c        ← tracked by parent git, fully visible
+│   ├── adb/          → symlink to source (excluded by sparse-checkout + .gitignore)
+│   └── core/         → symlink to source (excluded by sparse-checkout + .gitignore)
+```
+
+**How it works under the hood:**
+
+1. After creating the parent worktree via `git worktree add`, `rwt` enables sparse-checkout and excludes child repo paths (e.g. `!/system/adb/`).
+2. Git removes child repo files from the working tree (they don't exist on disk).
+3. `rwt` overlays symlinks to the source checkout on top of the now-empty paths.
+4. A `.gitignore` hides these symlinks from `git status` (they're untracked entries).
+5. The parent repo's own files remain fully tracked — any edits are visible to `git status` and `git diff` as normal.
+
+When a child repo is later promoted to its own worktree (`rwt promote`), the sparse-checkout rules are automatically updated to stop excluding that path.
+
+**Requirements**: Git ≥ 2.34 (released Nov 2021, required for per-worktree sparse-checkout support).
+
 ## License
 
 MIT
