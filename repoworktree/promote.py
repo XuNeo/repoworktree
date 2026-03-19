@@ -19,7 +19,13 @@ from repoworktree.worktree import (
     has_local_changes,
     DirtyWorktreeError,
 )
-from repoworktree.layout import _exclude_child_repos
+from repoworktree.layout import (
+    _exclude_child_repos,
+    _setup_sparse_checkout,
+    _disable_sparse_checkout,
+    _setup_worktree_excludes,
+    _disable_worktree_excludes,
+)
 
 
 def _has_own_changes(worktree_path: Path, repo_path: str, child_wts: list) -> bool:
@@ -297,7 +303,7 @@ def _handle_non_worktree_child_repos(
 ) -> None:
     """
     After creating a parent worktree, handle child repos that are NOT worktrees:
-    replace their checkout dirs with symlinks to source and exclude from git.
+    exclude from git first, then replace their checkout dirs with symlinks to source.
     """
     worktree_set = {w.path for w in meta.worktrees}
     child_repos = [
@@ -306,12 +312,22 @@ def _handle_non_worktree_child_repos(
     if not child_repos:
         return
 
+    # Exclude first (sparse-checkout removes files), then overlay symlinks
+    trie = build_trie(all_repos)
+    parent_node = trie.lookup(repo_path)
+    if parent_node and parent_node.children:
+        for w in meta.worktrees:
+            if w.path.startswith(repo_path + "/"):
+                wt_node = trie.lookup(w.path)
+                if wt_node:
+                    wt_node.is_worktree = True
+        _exclude_child_repos(worktree_path, parent_node)
+
     for child_repo in child_repos:
         rel = child_repo[len(repo_path) + 1 :]
         child_ws = worktree_path / rel
         child_src = source / child_repo
 
-        # Ensure intermediate dirs exist
         child_ws.parent.mkdir(parents=True, exist_ok=True)
 
         if child_ws.is_symlink():
@@ -330,18 +346,6 @@ def _handle_non_worktree_child_repos(
         elif not child_ws.exists():
             child_ws.symlink_to(child_src)
 
-    # Build a mini trie for _exclude_child_repos
-    trie = build_trie(all_repos)
-    parent_node = trie.lookup(repo_path)
-    if parent_node and parent_node.children:
-        # Mark worktrees in the trie so they're excluded from the exclude list
-        for w in meta.worktrees:
-            if w.path.startswith(repo_path + "/"):
-                wt_node = trie.lookup(w.path)
-                if wt_node:
-                    wt_node.is_worktree = True
-        _exclude_child_repos(worktree_path, parent_node)
-
 
 def _refresh_ancestor_excludes(
     workspace: Path,
@@ -350,7 +354,7 @@ def _refresh_ancestor_excludes(
     all_repos: list[str],
     meta,
 ) -> None:
-    """Re-generate .gitignore and skip-worktree for any ancestor worktree of repo_path."""
+    """Re-generate excludes for any ancestor worktree of repo_path."""
     worktree_set = {w.path for w in meta.worktrees}
     parts = repo_path.split("/")
     for i in range(len(parts) - 1, 0, -1):
@@ -372,82 +376,25 @@ def _refresh_ancestor_excludes(
 
 
 def _rewrite_exclude(worktree_path: Path, trie_node) -> None:
-    """Rebuild .gitignore and skip-worktree for a worktree from scratch."""
-    import subprocess
+    from repoworktree.layout import _collect_non_worktree_repo_paths
 
     child_repo_paths: list[str] = []
     intermediate_paths: list[str] = []
-    from repoworktree.layout import _collect_non_worktree_repo_paths
-
     _collect_non_worktree_repo_paths(
         trie_node, "", child_repo_paths, intermediate_paths
     )
 
     all_exclude_paths = child_repo_paths + intermediate_paths
 
-    # Reset all skip-worktree flags first, then re-apply only for current child repos
-    result = subprocess.run(
-        ["git", "ls-files", "-v"],
-        cwd=worktree_path,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        skip_files = [
-            line[2:] for line in result.stdout.splitlines() if line.startswith("S ")
-        ]
-        if skip_files:
-            subprocess.run(
-                ["git", "update-index", "--no-skip-worktree", "--stdin"],
-                cwd=worktree_path,
-                check=False,
-                capture_output=True,
-                input="\n".join(skip_files) + "\n",
-                text=True,
-            )
-
     if child_repo_paths:
-        result = subprocess.run(
-            ["git", "ls-files", "--"] + child_repo_paths,
-            cwd=worktree_path,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            subprocess.run(
-                ["git", "update-index", "--skip-worktree", "--stdin"],
-                cwd=worktree_path,
-                check=False,
-                capture_output=True,
-                input=result.stdout,
-                text=True,
-            )
+        _setup_sparse_checkout(worktree_path, child_repo_paths)
+    else:
+        _disable_sparse_checkout(worktree_path)
 
-    gitignore = worktree_path / ".gitignore"
     if all_exclude_paths:
-        lines = ["# Child repos managed by repoworktree"]
-        for path in all_exclude_paths:
-            lines.append(f"/{path}")
-        lines.append("/.gitignore")
-        gitignore.write_text("\n".join(lines) + "\n")
-    elif gitignore.exists():
-        gitignore.unlink()
-        subprocess.run(
-            ["git", "update-index", "--no-skip-worktree", "--", ".gitignore"],
-            cwd=worktree_path,
-            check=False,
-            capture_output=True,
-        )
-        return
-
-    subprocess.run(
-        ["git", "update-index", "--skip-worktree", "--", ".gitignore"],
-        cwd=worktree_path,
-        check=False,
-        capture_output=True,
-    )
+        _setup_worktree_excludes(worktree_path, all_exclude_paths)
+    else:
+        _disable_worktree_excludes(worktree_path)
 
 
 def _ensure_path_is_real(
