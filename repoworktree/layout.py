@@ -9,6 +9,7 @@ Core algorithm: recursively traverse the repo prefix trie, creating:
 
 from __future__ import annotations
 
+import functools
 import os
 from pathlib import Path
 
@@ -16,6 +17,206 @@ import subprocess
 
 from repoworktree.scanner import RepoTrie, TrieNode
 from repoworktree.worktree import add_worktree as git_worktree_add
+
+
+# ---------------------------------------------------------------------------
+# Git version check
+# ---------------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=1)
+def _git_version() -> tuple[int, ...]:
+    """Return installed git version as a tuple, e.g. (2, 43, 0)."""
+    result = subprocess.run(
+        ["git", "--version"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    # "git version 2.43.0" → "2.43.0"
+    version_str = result.stdout.strip().rsplit(" ", 1)[-1]
+    parts: list[int] = []
+    for p in version_str.split("."):
+        try:
+            parts.append(int(p))
+        except ValueError:
+            break
+    return tuple(parts) if parts else (0,)
+
+
+def _require_git_version(min_version: tuple[int, ...]) -> None:
+    """Raise RuntimeError if installed git is older than min_version."""
+    actual = _git_version()
+    if actual < min_version:
+        actual_str = ".".join(str(p) for p in actual)
+        min_str = ".".join(str(p) for p in min_version)
+        raise RuntimeError(
+            f"repoworktree requires Git >= {min_str}, but found {actual_str}. "
+            f"Please upgrade git."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Worktree gitdir resolution
+# ---------------------------------------------------------------------------
+
+
+def _get_worktree_gitdir(worktree_path: Path) -> Path:
+    """
+    Resolve the actual git directory for a worktree.
+
+    For linked worktrees ``.git`` is a file containing
+    ``gitdir: <path>``.  Parse it to find the real gitdir
+    (e.g. ``<source>/.git/worktrees/<name>``).
+    """
+    git_entry = worktree_path / ".git"
+    if git_entry.is_file():
+        content = git_entry.read_text().strip()
+        if content.startswith("gitdir:"):
+            git_dir = Path(content[len("gitdir:") :].strip())
+            if not git_dir.is_absolute():
+                git_dir = (worktree_path / git_dir).resolve()
+            return git_dir
+    # Fallback for regular repos (shouldn't happen in practice)
+    return worktree_path / ".git"
+
+
+# ---------------------------------------------------------------------------
+# Sparse-checkout helpers
+# ---------------------------------------------------------------------------
+
+
+def _ensure_worktree_config(worktree_path: Path) -> None:
+    """Enable per-worktree config (idempotent). Required for sparse-checkout and excludesFile."""
+    _require_git_version((2, 34))
+    subprocess.run(
+        ["git", "config", "extensions.worktreeConfig", "true"],
+        cwd=worktree_path,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _setup_sparse_checkout(worktree_path: Path, exclude_paths: list[str]) -> None:
+    """
+    Configure sparse-checkout to exclude specified paths.
+
+    Uses non-cone mode with ``extensions.worktreeConfig`` so each worktree
+    has independent sparse-checkout state.  Writes rules::
+
+        /*
+        !/<path>/
+
+    Then runs ``git read-tree -mu HEAD`` to apply (removes excluded
+    files from the working tree).
+    """
+    if not exclude_paths:
+        return
+
+    _ensure_worktree_config(worktree_path)
+    subprocess.run(
+        ["git", "config", "--worktree", "core.sparseCheckout", "true"],
+        cwd=worktree_path,
+        check=True,
+        capture_output=True,
+    )
+
+    git_dir = _get_worktree_gitdir(worktree_path)
+    info_dir = git_dir / "info"
+    info_dir.mkdir(parents=True, exist_ok=True)
+    sparse_file = info_dir / "sparse-checkout"
+
+    lines = ["/*"]
+    for path in exclude_paths:
+        lines.append(f"!/{path}/")
+    sparse_file.write_text("\n".join(lines) + "\n")
+
+    subprocess.run(
+        ["git", "read-tree", "-mu", "HEAD"],
+        cwd=worktree_path,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _disable_sparse_checkout(worktree_path: Path) -> None:
+    """
+    Disable sparse-checkout for a worktree.
+
+    Removes the sparse-checkout file and unsets ``core.sparseCheckout``,
+    then runs ``git read-tree -mu HEAD`` to restore all files.
+    """
+    git_dir = _get_worktree_gitdir(worktree_path)
+    sparse_file = git_dir / "info" / "sparse-checkout"
+
+    if sparse_file.exists():
+        sparse_file.unlink()
+
+    subprocess.run(
+        ["git", "config", "--worktree", "--unset", "core.sparseCheckout"],
+        cwd=worktree_path,
+        check=False,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "read-tree", "-mu", "HEAD"],
+        cwd=worktree_path,
+        check=False,
+        capture_output=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-worktree exclude helpers
+# ---------------------------------------------------------------------------
+
+
+def _setup_worktree_excludes(worktree_path: Path, exclude_paths: list[str]) -> None:
+    """
+    Hide *untracked* symlinks from ``git status`` by writing exclude
+    patterns to the worktree's own ``info/exclude`` file and pointing
+    ``core.excludesFile`` (per-worktree) at it.
+
+    Requires ``extensions.worktreeConfig`` (call ``_ensure_worktree_config`` first).
+    """
+    if not exclude_paths:
+        return
+
+    _ensure_worktree_config(worktree_path)
+
+    git_dir = _get_worktree_gitdir(worktree_path)
+    info_dir = git_dir / "info"
+    info_dir.mkdir(parents=True, exist_ok=True)
+    exclude_file = info_dir / "exclude"
+
+    lines = ["# Managed by repoworktree — do not edit"]
+    for path in exclude_paths:
+        lines.append(f"/{path}")
+    exclude_file.write_text("\n".join(lines) + "\n")
+
+    subprocess.run(
+        ["git", "config", "--worktree", "core.excludesFile", str(exclude_file)],
+        cwd=worktree_path,
+        check=True,
+        capture_output=True,
+    )
+
+
+def _disable_worktree_excludes(worktree_path: Path) -> None:
+    """Remove per-worktree exclude file and unset ``core.excludesFile``."""
+    git_dir = _get_worktree_gitdir(worktree_path)
+    exclude_file = git_dir / "info" / "exclude"
+
+    if exclude_file.exists():
+        exclude_file.unlink()
+
+    subprocess.run(
+        ["git", "config", "--worktree", "--unset", "core.excludesFile"],
+        cwd=worktree_path,
+        check=False,
+        capture_output=True,
+    )
 
 
 # File extensions to ignore when symlinking top-level files
@@ -136,6 +337,9 @@ def _build_level(
             # Child repos that are worktrees get created on top;
             # child repos that aren't worktrees get symlinked on top.
             if child.children:
+                # Exclude first (sparse-checkout removes files from worktree),
+                # then recurse to overlay symlinks on now-empty paths.
+                _exclude_child_repos(child_workspace, child)
                 _build_level(
                     child_source,
                     child_workspace,
@@ -147,9 +351,6 @@ def _build_level(
                     inside_worktree=True,
                     checkout=checkout,
                 )
-                # Exclude non-worktree child repo paths from git status
-                # so symlinked child repos don't appear as dirty
-                _exclude_child_repos(child_workspace, child)
 
         elif child.has_worktree_descendant:
             # Intermediate directory leading to a worktree: create real dir and recurse
@@ -258,9 +459,8 @@ def _exclude_child_repos(worktree_path: Path, trie_node: TrieNode) -> None:
     """
     Hide non-worktree child repo paths from git in a parent worktree.
 
-    Uses skip-worktree flag for tracked files that get replaced by symlinks,
-    and .gitignore for untracked intermediate dirs we create (info/exclude
-    is not reliably read for worktrees by all git versions).
+    Uses sparse-checkout (tracked files) + per-worktree core.excludesFile
+    pointing to info/exclude (untracked symlinks).
     """
     child_repo_paths: list[str] = []
     intermediate_paths: list[str] = []
@@ -273,42 +473,8 @@ def _exclude_child_repos(worktree_path: Path, trie_node: TrieNode) -> None:
     all_exclude_paths = child_repo_paths + intermediate_paths
 
     if child_repo_paths:
-        result = subprocess.run(
-            ["git", "ls-files", "--"] + child_repo_paths,
-            cwd=worktree_path,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            subprocess.run(
-                ["git", "update-index", "--skip-worktree", "--stdin"],
-                cwd=worktree_path,
-                check=False,
-                capture_output=True,
-                input=result.stdout,
-                text=True,
-            )
-
-    gitignore = worktree_path / ".gitignore"
-    lines = []
-    if gitignore.exists():
-        lines = gitignore.read_text().splitlines()
-    lines.append("# Child repos managed by repoworktree")
-    for path in all_exclude_paths:
-        pattern = f"/{path}"
-        if pattern not in lines:
-            lines.append(pattern)
-    if "/.gitignore" not in lines:
-        lines.append("/.gitignore")
-    gitignore.write_text("\n".join(lines) + "\n")
-
-    subprocess.run(
-        ["git", "update-index", "--skip-worktree", "--", ".gitignore"],
-        cwd=worktree_path,
-        check=False,
-        capture_output=True,
-    )
+        _setup_sparse_checkout(worktree_path, child_repo_paths)
+    _setup_worktree_excludes(worktree_path, all_exclude_paths)
 
 
 def _collect_non_worktree_repo_paths(

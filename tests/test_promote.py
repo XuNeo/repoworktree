@@ -5,7 +5,11 @@ from pathlib import Path
 
 import pytest
 from repoworktree.scanner import scan_repos, build_trie
-from repoworktree.layout import build_workspace, teardown_workspace
+from repoworktree.layout import (
+    build_workspace,
+    teardown_workspace,
+    _get_worktree_gitdir,
+)
 from repoworktree.metadata import (
     load_workspace_metadata,
     save_workspace_metadata,
@@ -52,6 +56,15 @@ def _cleanup_worktrees(repo_env, workspace_dir, paths):
     wt_set = {w.path for w in meta.worktrees}
     trie = build_trie(paths, worktree_paths=wt_set)
     teardown_workspace(repo_env.source_dir, workspace_dir, trie)
+
+
+def _read_worktree_exclude(worktree_path: Path) -> str:
+    """Read the per-worktree info/exclude file content."""
+    git_dir = _get_worktree_gitdir(worktree_path)
+    exclude_file = git_dir / "info" / "exclude"
+    if exclude_file.exists():
+        return exclude_file.read_text()
+    return ""
 
 
 def test_promote_top_level(repo_env, workspace_dir):
@@ -144,7 +157,9 @@ def test_promote_with_pin(repo_env, workspace_dir):
     assert get_head(workspace_dir / "nuttx") == pin_commit
 
     meta = load_workspace_metadata(workspace_dir)
-    assert meta.find_worktree("nuttx").pinned == pin_commit
+    nuttx_entry = meta.find_worktree("nuttx")
+    assert nuttx_entry is not None
+    assert nuttx_entry.pinned == pin_commit
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
@@ -157,7 +172,9 @@ def test_promote_with_branch(repo_env, workspace_dir):
 
     assert_is_worktree(workspace_dir / "nuttx")
     meta = load_workspace_metadata(workspace_dir)
-    assert meta.find_worktree("nuttx").branch == "feat-test"
+    nuttx_entry = meta.find_worktree("nuttx")
+    assert nuttx_entry is not None
+    assert nuttx_entry.branch == "feat-test"
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
@@ -259,7 +276,7 @@ def _git_status_shows_change(worktree_path: Path, rel_file: str) -> bool:
     Modify a file in a worktree and check if git status detects it.
 
     Returns True if git status shows the change (correct behavior),
-    False if the change is invisible (bug: skip-worktree or gitignore hiding it).
+    False if the change is invisible (bug: sparse-checkout or excludes hiding it).
     """
     fpath = worktree_path / rel_file
     assert fpath.exists(), f"File does not exist: {fpath}"
@@ -283,7 +300,7 @@ def test_create_worktree_sibling_files_visible_in_git_status(repo_env, workspace
     """Bug 1: rwt create -w nuttx — files in fs/ (sibling to child repo fs/fatfs)
     must be visible to git status.
 
-    _exclude_child_repos should only skip-worktree files inside the child repo
+    _exclude_child_repos should only exclude files inside the child repo
     (fs/fatfs/), NOT sibling files like fs/vfs.c that live in the parent repo.
     """
     paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"nuttx"})
@@ -295,7 +312,7 @@ def test_create_worktree_sibling_files_visible_in_git_status(repo_env, workspace
     # Modifying it MUST show up in git status.
     assert _git_status_shows_change(nuttx_ws, "fs/vfs.c"), (
         "fs/vfs.c change invisible to git status — "
-        "skip-worktree is over-broad, marking sibling files of child repo"
+        "exclude is over-broad, hiding sibling files of child repo"
     )
 
     # Also verify a top-level file still works
@@ -376,27 +393,28 @@ def test_promote_child_updates_parent_exclude(repo_env, workspace_dir):
     """Issue 3: promoting a child repo should update parent worktree's exclusions.
 
     When apps is a worktree, child repos like apps/system/adb are excluded
-    via skip-worktree + .gitignore. After promoting adb to its own worktree,
-    the parent's .gitignore should no longer list it.
+    via per-worktree info/exclude. After promoting adb to its own worktree,
+    the parent's exclude should no longer list it.
     """
     paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps"})
     apps_ws = workspace_dir / "apps"
     assert_is_worktree(apps_ws)
 
-    gitignore = apps_ws / ".gitignore"
-    assert gitignore.exists()
-    old_content = gitignore.read_text()
+    old_content = _read_worktree_exclude(apps_ws)
     assert "/system/adb" in old_content or "/system" in old_content, (
-        f"Expected child repo exclusion in .gitignore, got: {old_content}"
+        f"Expected child repo exclusion in info/exclude, got: {old_content}"
     )
 
     promote(workspace_dir, repo_env.source_dir, "apps/system/adb", paths)
     assert_is_worktree(workspace_dir / "apps" / "system" / "adb")
 
-    new_content = gitignore.read_text()
+    new_content = _read_worktree_exclude(apps_ws)
     assert "/system/adb" not in new_content, (
-        f"After promoting apps/system/adb, parent .gitignore should no longer "
+        f"After promoting apps/system/adb, parent info/exclude should no longer "
         f"exclude /system/adb, got: {new_content}"
+    )
+    assert not (apps_ws / ".gitignore").exists(), (
+        "Should not create .gitignore in worktree"
     )
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
@@ -406,9 +424,9 @@ def test_promote_child_updates_parent_exclude(repo_env, workspace_dir):
 
 
 def test_promote_dirty_dir_rejected(repo_env, workspace_dir):
-    """BUG-005: dirty check gate exists — test skips if guard excluded by .gitignore.
+    """BUG-005: dirty check gate exists — skip if info/exclude hides child dir.
 
-    In normal workspace usage system/adb is excluded via .gitignore so git status
+    In normal workspace usage system/adb is excluded via info/exclude so git status
     won't see it. This test documents the expected behavior and verifies the guard
     logic is reachable when git status can see the directory.
     """
@@ -422,21 +440,17 @@ def test_promote_dirty_dir_rejected(repo_env, workspace_dir):
         capture_output=True,
         text=True,
     )
-    if (
-        "system/adb" not in (apps_ws / ".gitignore").read_text()
-        if (apps_ws / ".gitignore").exists()
-        else True
-    ):
-        pass
+    if not result.stdout.strip():
+        _cleanup_worktrees(repo_env, workspace_dir, paths)
+        pytest.skip(
+            "system/adb excluded by info/exclude — dirty guard cannot fire in test env"
+        )
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
-    pytest.skip(
-        "system/adb excluded by .gitignore — dirty guard cannot fire in test env"
-    )
 
 
 def test_promote_dirty_dir_force(repo_env, workspace_dir):
-    """BUG-005: promote with force=True succeeds even when target dir has local changes."""
+    """BUG-005: promote with force=True succeeds when target dir has local changes."""
     paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps"})
     apps_ws = workspace_dir / "apps"
 
@@ -453,67 +467,6 @@ def test_promote_dirty_dir_force(repo_env, workspace_dir):
         assert_is_worktree(apps_ws / "system" / "adb")
     finally:
         _cleanup_worktrees(repo_env, workspace_dir, paths)
-
-
-def test_promote_child_repo_dirty_dir_rejected(repo_env, workspace_dir):
-    """BUG-015: dirty child dir guard — skips if child excluded by .gitignore."""
-    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps"})
-    _cleanup_worktrees(repo_env, workspace_dir, paths)
-    pytest.skip(
-        "system/adb excluded by .gitignore — BUG-015 guard cannot fire in test env"
-    )
-
-
-def test_promote_dirty_dir_force(repo_env, workspace_dir):
-    """BUG-005: promote with force=True succeeds even when dir has local changes."""
-    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps"})
-    apps_ws = workspace_dir / "apps"
-
-    adb_path = apps_ws / "system" / "adb"
-    if adb_path.is_symlink():
-        adb_path.unlink()
-        adb_path.mkdir(parents=True)
-    (adb_path / "new_file.txt").write_text("local work")
-
-    try:
-        promote(
-            workspace_dir, repo_env.source_dir, "apps/system/adb", paths, force=True
-        )
-        assert_is_worktree(apps_ws / "system" / "adb")
-    finally:
-        _cleanup_worktrees(repo_env, workspace_dir, paths)
-
-
-def test_promote_dirty_dir_force(repo_env, workspace_dir):
-    """BUG-005: promote with force=True succeeds even when dir has local changes."""
-    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps"})
-    apps_ws = workspace_dir / "apps"
-
-    adb_path = apps_ws / "system" / "adb"
-    if adb_path.is_symlink():
-        adb_path.unlink()
-        adb_path.mkdir(parents=True)
-    (adb_path / "new_file.txt").write_text("local work")
-
-    promote(workspace_dir, repo_env.source_dir, "apps/system/adb", paths, force=True)
-    assert_is_worktree(apps_ws / "system" / "adb")
-    _cleanup_worktrees(repo_env, workspace_dir, paths)
-
-
-def test_promote_dirty_dir_force(repo_env, workspace_dir):
-    """BUG-005: promote with force=True succeeds even when dir has local changes."""
-    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps"})
-    apps_ws = workspace_dir / "apps"
-
-    adb_path = apps_ws / "system" / "adb"
-    if adb_path.is_symlink():
-        adb_path.unlink()
-        adb_path.mkdir(parents=True)
-    (adb_path / "new_file.txt").write_text("local work")
-
-    promote(workspace_dir, repo_env.source_dir, "apps/system/adb", paths, force=True)
-    assert_is_worktree(apps_ws / "system" / "adb")
-    _cleanup_worktrees(repo_env, workspace_dir, paths)
 
 
 def test_promote_rollback_on_add_failure(repo_env, workspace_dir, monkeypatch):
@@ -555,40 +508,9 @@ def test_promote_rollback_on_add_failure(repo_env, workspace_dir, monkeypatch):
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
 
-def test_promote_child_repo_dirty_dir_rejected(repo_env, workspace_dir):
-    """BUG-015: dirty child dir guard exists — skip if excluded by .gitignore."""
-    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps"})
-    apps_ws = workspace_dir / "apps"
-    assert_is_worktree(apps_ws)
-
-    adb_path = apps_ws / "system" / "adb"
-    if adb_path.is_symlink():
-        adb_path.unlink()
-        adb_path.mkdir(parents=True)
-    (adb_path / "local_change.txt").write_text("untracked work")
-
-    result = subprocess.run(
-        ["git", "status", "--porcelain", "--", "system/adb"],
-        cwd=apps_ws,
-        capture_output=True,
-        text=True,
-    )
-
-    try:
-        if not result.stdout.strip():
-            pytest.skip(
-                "system/adb excluded by .gitignore — BUG-015 guard cannot fire here"
-            )
-
-        with pytest.raises(DirtyWorktreeError):
-            promote(workspace_dir, repo_env.source_dir, "apps", paths)
-
-        assert (adb_path / "local_change.txt").exists()
-    finally:
-        _cleanup_worktrees(repo_env, workspace_dir, paths)
-
-
-def test_promote_child_repo_dirty_dir_rejected(repo_env, workspace_dir):
+def test_promote_child_repo_dirty_dir_rejected_with_rmtree_tracking(
+    repo_env, workspace_dir
+):
     """BUG-015: _dir_has_changes blocks promote when parent worktree sees dirty child dir."""
     paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps"})
     apps_ws = workspace_dir / "apps"
@@ -607,7 +529,7 @@ def test_promote_child_repo_dirty_dir_rejected(repo_env, workspace_dir):
         text=True,
     )
     if not result.stdout.strip():
-        pytest.skip("git status doesn't see system/adb (excluded by .gitignore)")
+        pytest.skip("git status doesn't see system/adb (excluded by rwt)")
 
     import repoworktree.promote as _promote_mod
 
@@ -617,8 +539,6 @@ def test_promote_child_repo_dirty_dir_rejected(repo_env, workspace_dir):
     def tracking_rmtree(path, *a, **kw):
         deleted_paths.append(str(path))
         return original_rmtree(path, *a, **kw)
-
-    import monkeytype_skip
 
     _promote_mod.shutil.rmtree = tracking_rmtree
     try:
