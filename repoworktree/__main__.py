@@ -611,6 +611,99 @@ def cmd_export(args):
     return 0
 
 
+def cmd_forall(args):
+    """Run a shell command in each sub-repo."""
+    import os
+    import subprocess
+    import concurrent.futures
+    import threading
+
+    ws_path = _resolve_workspace(args)
+    meta = load_workspace_metadata(ws_path)
+    source_dir = Path(meta.source)
+
+    # Determine scope: worktrees only (default) or all repos
+    if getattr(args, "all_repos", False):
+        repos_to_run = sorted(scan_repos(source_dir))
+    else:
+        repos_to_run = [wt.path for wt in meta.worktrees]
+
+    # Apply optional positional filter
+    filter_set = set(getattr(args, "repos", None) or [])
+    if filter_set:
+        repos_to_run = [r for r in repos_to_run if r in filter_set]
+
+    if not repos_to_run:
+        return 0
+
+    cmd = args.command
+    jobs = getattr(args, "jobs", 1)
+    print_header = getattr(args, "print_header", False)
+    abort_on_errors = getattr(args, "abort_on_errors", False)
+    total = len(repos_to_run)
+
+    def _make_env(idx: int, repo_path: str) -> dict:
+        repo_abs = ws_path / repo_path
+        env = os.environ.copy()
+        env["RWT_PROJECT"] = repo_path
+        env["RWT_PATH"] = str(repo_abs.resolve())
+        env["RWT_TYPE"] = "worktree" if (repo_abs / ".git").is_file() else "symlink"
+        env["RWT_COUNT"] = str(total)
+        env["RWT_I"] = str(idx)
+        return env
+
+    if jobs == 1:
+        rc_overall = 0
+        for idx, repo_path in enumerate(repos_to_run):
+            repo_abs = ws_path / repo_path
+            if not repo_abs.exists():
+                continue
+            if print_header:
+                print(f"--- {repo_path} ---")
+            env = _make_env(idx, repo_path)
+            result = subprocess.run(cmd, shell=True, cwd=str(repo_abs), env=env)
+            if result.returncode != 0:
+                rc_overall = result.returncode
+                if abort_on_errors:
+                    return rc_overall
+        return rc_overall
+
+    # Parallel: capture per-project output, print after each completes
+    rc_overall = 0
+    lock = threading.Lock()
+
+    def _run_one(idx_repo):
+        idx, repo_path = idx_repo
+        repo_abs = ws_path / repo_path
+        if not repo_abs.exists():
+            return repo_path, 0, "", ""
+        env = _make_env(idx, repo_path)
+        result = subprocess.run(
+            cmd, shell=True, cwd=str(repo_abs), env=env,
+            capture_output=True, text=True,
+        )
+        return repo_path, result.returncode, result.stdout, result.stderr
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as executor:
+        futures = {
+            executor.submit(_run_one, (idx, rp)): rp
+            for idx, rp in enumerate(repos_to_run)
+        }
+        for future in concurrent.futures.as_completed(futures):
+            repo_path, rc, stdout, stderr = future.result()
+            with lock:
+                if print_header:
+                    print(f"--- {repo_path} ---")
+                if stdout:
+                    print(stdout, end="")
+                if stderr:
+                    print(stderr, end="", file=sys.stderr)
+            if rc != 0:
+                rc_overall = rc
+
+    return rc_overall
+
+
 # ── CLI definition ────────────────────────────────────────────────
 
 
@@ -816,6 +909,59 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output directory (default: current directory)",
     )
     p_export.set_defaults(func=cmd_export)
+
+    # ── forall ──
+    p_forall = sub.add_parser(
+        "forall", help="Run a shell command in each sub-repo"
+    )
+    p_forall.add_argument(
+        "repos",
+        nargs="*",
+        default=[],
+        help="Sub-repo paths to iterate (default: all in scope)",
+    )
+    p_forall.add_argument(
+        "-c",
+        "--command",
+        required=True,
+        help="Shell command to run in each repo",
+    )
+    p_forall.add_argument(
+        "-a",
+        "--all",
+        action="store_true",
+        dest="all_repos",
+        help="Include symlinked repos (default: worktrees only)",
+    )
+    p_forall.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Run in N parallel jobs (default: 1)",
+    )
+    p_forall.add_argument(
+        "-p",
+        "--print-header",
+        action="store_true",
+        dest="print_header",
+        help="Print project name header before each command output",
+    )
+    p_forall.add_argument(
+        "-e",
+        "--abort-on-errors",
+        action="store_true",
+        dest="abort_on_errors",
+        help="Abort after first non-zero exit (serial mode only)",
+    )
+    p_forall.add_argument(
+        "-W",
+        "--workspace",
+        default=None,
+        help="Workspace path or name (default: auto-detect from CWD)",
+    )
+    p_forall.set_defaults(func=cmd_forall)
 
     return parser
 
