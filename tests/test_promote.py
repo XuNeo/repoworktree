@@ -225,6 +225,54 @@ def test_promote_middle_of_chain_preserves_source(repo_env, workspace_dir):
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
 
+def test_promote_parent_with_child_worktree_no_untracked_overlay(
+    repo_env, workspace_dir
+):
+    """Regression: when a child worktree (apps/system/adb) has its own
+    deeper manifest sub-repo (apps/system/adb/sub), promoting the grandparent
+    (apps) must not overlay `sub/` as an unmanaged symlink inside the adb
+    worktree's working tree — that would leave `sub/` showing up as untracked
+    in `git -C ws/apps/system/adb status`.
+
+    Deep descendants belonging to a child worktree are that worktree's
+    concern; the grandparent's `_handle_non_worktree_child_repos` must skip
+    them. Equivalently, the grandparent's info/exclude must not carry
+    entries that belong to the child worktree's scope.
+    """
+    paths = _create_ws_with_worktrees(
+        repo_env, workspace_dir, {"apps/system/adb"}
+    )
+    adb_ws = workspace_dir / "apps" / "system" / "adb"
+    assert_is_worktree(adb_ws)
+
+    promote(workspace_dir, repo_env.source_dir, "apps", paths)
+
+    assert_is_worktree(workspace_dir / "apps")
+    assert_is_worktree(adb_ws)
+
+    # adb worktree must not see `sub/` as an untracked path.
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=adb_ws,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "sub" not in result.stdout, (
+        f"adb worktree sees untracked overlay from grandparent promote:\n"
+        f"{result.stdout}"
+    )
+
+    # Parent (apps) info/exclude must not carry entries owned by the adb
+    # worktree's scope (adb/sub is adb's concern, not apps's).
+    apps_exclude = _read_worktree_exclude(workspace_dir / "apps")
+    assert "/system/adb/sub" not in apps_exclude, (
+        f"apps info/exclude leaked adb's sub-repo:\n{apps_exclude}"
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
 def test_promote_demote_parent_cycle_nested(repo_env, workspace_dir):
     """Regression: promote(parent) followed by demote(parent) on a 3-level
     nested chain leaves source untouched and restores the all-symlink state

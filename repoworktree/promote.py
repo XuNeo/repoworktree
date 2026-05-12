@@ -307,8 +307,26 @@ def _handle_non_worktree_child_repos(
     exclude from git first, then replace their checkout dirs with symlinks to source.
     """
     worktree_set = {w.path for w in meta.worktrees}
+
+    def _has_worktree_ancestor_below(repo: str) -> bool:
+        """True if `repo` has an ancestor in worktree_set strictly under the
+        parent being promoted. Descendants of a child worktree are that
+        worktree's responsibility, not ours."""
+        parts = repo.split("/")
+        for i in range(len(parts) - 1, 0, -1):
+            ancestor = "/".join(parts[:i])
+            if ancestor == repo_path:
+                return False
+            if ancestor in worktree_set:
+                return True
+        return False
+
     child_repos = [
-        r for r in all_repos if r.startswith(repo_path + "/") and r not in worktree_set
+        r
+        for r in all_repos
+        if r.startswith(repo_path + "/")
+        and r not in worktree_set
+        and not _has_worktree_ancestor_below(r)
     ]
     if not child_repos:
         return

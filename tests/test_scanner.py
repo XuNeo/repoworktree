@@ -5,9 +5,9 @@ from repoworktree.scanner import scan_repos, build_trie, RepoTrie
 
 
 def test_scan_project_list(repo_env):
-    """From .repo/project.list, correctly parse all 13 sub-repo paths."""
+    """From .repo/project.list, correctly parse all sub-repo paths."""
     paths = scan_repos(repo_env.source_dir)
-    assert len(paths) == 13
+    assert len(paths) == len(repo_env.all_repo_paths)
     assert paths == repo_env.all_repo_paths
 
 

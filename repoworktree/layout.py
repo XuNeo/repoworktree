@@ -489,7 +489,16 @@ def _collect_non_worktree_repo_paths(
     child_repos: list[str],
     intermediates: list[str],
 ) -> None:
-    """Collect child repo paths and intermediate directory paths separately."""
+    """Collect child repo paths and intermediate directory paths separately.
+
+    Stops descending at worktree boundaries — any descendants under a child
+    that is itself a worktree belong to that child's own exclude scope, not
+    this parent's. Without this cutoff the parent's info/exclude would leak
+    entries like ``/system/adb/sub`` (owned by the adb worktree) and the
+    intermediate ``/system/adb`` (the adb worktree itself), which contradicts
+    the post-promote invariant that the parent stops tracking paths that
+    have become independent worktrees.
+    """
     for name, child in node.children.items():
         child_path = f"{prefix}/{name}" if prefix else name
         if child.is_repo and not child.is_worktree:
@@ -499,6 +508,9 @@ def _collect_non_worktree_repo_paths(
                 intermediate = "/".join(parts[:i])
                 if intermediate not in intermediates:
                     intermediates.append(intermediate)
+        # Skip subtrees rooted at a child worktree.
+        if child.is_worktree:
+            continue
         if child.children:
             _collect_non_worktree_repo_paths(
                 child, child_path, child_repos, intermediates

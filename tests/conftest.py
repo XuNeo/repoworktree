@@ -44,6 +44,11 @@ REPO_DEFS = [
     ),
     ("apps-system-adb", "apps/system/adb", {"README.md": "# ADB", "adb.c": "// adb"}),
     (
+        "apps-system-adb-sub",
+        "apps/system/adb/sub",
+        {"README.md": "# ADB sub", "sub.c": "// sub"},
+    ),
+    (
         "apps-system-core",
         "apps/system/core",
         {"README.md": "# Core", "core.c": "// core"},
