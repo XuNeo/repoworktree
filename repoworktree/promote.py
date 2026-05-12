@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 from repoworktree.scanner import scan_repos, build_trie
@@ -323,12 +324,40 @@ def _handle_non_worktree_child_repos(
                     wt_node.is_worktree = True
         _exclude_child_repos(worktree_path, parent_node)
 
-    for child_repo in child_repos:
+    # Process only the shallowest child_repo per branch; deeper repos are
+    # reached through the shallower symlink overlay and must not be iterated.
+    # Iterating deeper paths is actively destructive: child_ws builds from
+    # the workspace side, but its path resolution follows the just-created
+    # shallower symlink into source, and Path.is_dir() then reports True
+    # against the real source directory. The rmtree+symlink_to branch below
+    # would then delete the source checkout and write a self-loop symlink at
+    # the source location.
+    child_repos_sorted = sorted(child_repos)
+    shallowest: list[str] = []
+    for cr in child_repos_sorted:
+        if any(cr.startswith(s + "/") for s in shallowest):
+            continue
+        shallowest.append(cr)
+
+    for child_repo in shallowest:
         rel = child_repo[len(repo_path) + 1 :]
         child_ws = worktree_path / rel
         child_src = source / child_repo
 
         child_ws.parent.mkdir(parents=True, exist_ok=True)
+
+        if not child_src.exists():
+            # Manifest lists this child repo but source has no checkout
+            # (never `repo sync`-ed). A dangling symlink breaks downstream
+            # mkdir/file ops (CMake `file(MAKE_DIRECTORY)` and `repo sync`
+            # hit EEXIST via the broken link).
+            if child_ws.is_symlink() and not child_ws.exists():
+                child_ws.unlink()
+            print(
+                f"  Warning: skipping child repo {child_repo} (not present in source)",
+                file=sys.stderr,
+            )
+            continue
 
         if child_ws.is_symlink():
             pass

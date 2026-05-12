@@ -126,6 +126,142 @@ def test_promote_parent_with_child_worktree(repo_env, workspace_dir):
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
 
+def test_promote_parent_preserves_nested_grandchild_source(repo_env, workspace_dir):
+    """Regression: promote(parent) with nested parent→child→grandchild repos
+    must not touch the source checkout of the grandchild.
+
+    The fixture's layout has three repos on one branch:
+      frameworks
+        frameworks/system
+          frameworks/system/core
+          frameworks/system/kvdb
+
+    Pre-fix, `_handle_non_worktree_child_repos` processed all descendants in
+    manifest order. After it symlinked `ws/frameworks/system -> source/...`,
+    the later iteration for `frameworks/system/core` built `child_ws` as
+    `ws/frameworks/system/core`, whose path resolution traversed the just-made
+    symlink into source. `child_ws.is_dir()` then returned True (source's core
+    is a real dir), triggering `shutil.rmtree(child_ws)` — deleting source's
+    core — followed by `symlink_to(child_src)` — creating a self-referential
+    symlink at source/frameworks/system/core.
+    """
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    src = repo_env.source_dir
+
+    # Pre-promote: source has real directories with real content for the
+    # nested grandchildren.
+    core_readme = src / "frameworks" / "system" / "core" / "README.md"
+    kvdb_readme = src / "frameworks" / "system" / "kvdb" / "README.md"
+    core_before = core_readme.read_text()
+    kvdb_before = kvdb_readme.read_text()
+    assert (src / "frameworks" / "system" / "core").is_dir()
+    assert not (src / "frameworks" / "system" / "core").is_symlink()
+
+    promote(workspace_dir, src, "frameworks", paths)
+
+    # Source grandchildren must be untouched: still real dirs with original
+    # content, never replaced by a self-loop symlink.
+    for grandchild in ("core", "kvdb"):
+        p = src / "frameworks" / "system" / grandchild
+        assert p.exists(), f"{p} was deleted by promote"
+        assert not p.is_symlink(), (
+            f"{p} turned into a symlink — promote traversed the parent "
+            f"symlink and polluted source"
+        )
+        assert p.is_dir()
+    assert core_readme.read_text() == core_before
+    assert kvdb_readme.read_text() == kvdb_before
+
+    # Workspace side: parent is a worktree, child & grandchild are reached
+    # through the single symlink at frameworks/system.
+    assert_is_worktree(workspace_dir / "frameworks")
+    fws_system = workspace_dir / "frameworks" / "system"
+    assert fws_system.is_symlink()
+    # Content accessible through the symlink chain.
+    ws_core_readme = fws_system / "core" / "README.md"
+    assert ws_core_readme.read_text() == core_before
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_middle_of_chain_preserves_source(repo_env, workspace_dir):
+    """Regression: promote(middle-of-chain) must also preserve source.
+
+    Complement to the parent-level test: here we promote `frameworks/system`
+    (the middle node) and assert that its own grandchildren under source
+    (`frameworks/system/core`, `frameworks/system/kvdb`) survive, and that
+    the workspace overlays them correctly via symlink.
+    """
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    src = repo_env.source_dir
+
+    core_readme_src = src / "frameworks" / "system" / "core" / "README.md"
+    kvdb_readme_src = src / "frameworks" / "system" / "kvdb" / "README.md"
+    core_before = core_readme_src.read_text()
+    kvdb_before = kvdb_readme_src.read_text()
+
+    promote(workspace_dir, src, "frameworks/system", paths)
+
+    # Source grandchildren untouched.
+    for grandchild in ("core", "kvdb"):
+        p = src / "frameworks" / "system" / grandchild
+        assert p.exists(), f"{p} was deleted by promote"
+        assert not p.is_symlink(), f"{p} turned into a symlink"
+        assert p.is_dir()
+    assert core_readme_src.read_text() == core_before
+    assert kvdb_readme_src.read_text() == kvdb_before
+
+    # Workspace: middle is a worktree, grandchildren are symlinks back to
+    # source with readable content.
+    assert_is_worktree(workspace_dir / "frameworks" / "system")
+    for grandchild in ("core", "kvdb"):
+        ws_grand = workspace_dir / "frameworks" / "system" / grandchild
+        assert ws_grand.is_symlink(), f"{ws_grand} is not a symlink"
+    assert (
+        (workspace_dir / "frameworks" / "system" / "core" / "README.md").read_text()
+        == core_before
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_demote_parent_cycle_nested(repo_env, workspace_dir):
+    """Regression: promote(parent) followed by demote(parent) on a 3-level
+    nested chain leaves source untouched and restores the all-symlink state
+    without wedging the workspace.
+    """
+    from repoworktree.promote import demote
+
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    src = repo_env.source_dir
+
+    core_readme_src = src / "frameworks" / "system" / "core" / "README.md"
+    core_before = core_readme_src.read_text()
+
+    promote(workspace_dir, src, "frameworks", paths)
+    demote(workspace_dir, src, "frameworks", paths)
+
+    # Source intact.
+    assert (src / "frameworks" / "system" / "core").is_dir()
+    assert not (src / "frameworks" / "system" / "core").is_symlink()
+    assert core_readme_src.read_text() == core_before
+
+    # Workspace frameworks back to a symlink; no leftover worktree metadata.
+    from repoworktree.metadata import load_workspace_metadata
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert meta.find_worktree("frameworks") is None
+    assert_is_symlink(workspace_dir / "frameworks")
+
+    # Grandchild content still reachable through the symlink.
+    assert (
+        (workspace_dir / "frameworks" / "system" / "core" / "README.md").read_text()
+        == core_before
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
 def test_promote_already_worktree(repo_env, workspace_dir):
     """Promote an already-worktree repo → raises error."""
     paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"nuttx"})

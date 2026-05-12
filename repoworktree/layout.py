@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import functools
 import os
-from pathlib import Path
-
+import shutil
 import subprocess
+import sys
+from pathlib import Path
 
 from repoworktree.scanner import RepoTrie, TrieNode
 from repoworktree.worktree import add_worktree as git_worktree_add
@@ -321,8 +322,6 @@ def _build_level(
             # Create git worktree for this repo
             rel_path = str(child_workspace.relative_to(workspace_root))
             if not child_source.exists():
-                import sys
-
                 print(
                     f"  Warning: skipping {rel_path} (not present in source checkout)",
                     file=sys.stderr,
@@ -375,6 +374,15 @@ def _build_level(
         elif inside_worktree:
             # We're inside a parent worktree checkout. Child repos in the trie
             # need to be symlinked on top, and intermediate dirs may need creation.
+            if child.is_repo and not child_source.exists():
+                # Manifest lists this child repo but source has no checkout.
+                # Skip — a dangling symlink breaks mkdir/file ops downstream.
+                rel_path = str(child_workspace.relative_to(workspace_root))
+                print(
+                    f"  Warning: skipping child repo {rel_path} (not present in source)",
+                    file=sys.stderr,
+                )
+                continue
             if (
                 child.is_repo
                 and child_workspace.exists()
@@ -382,8 +390,6 @@ def _build_level(
             ):
                 # Child repo dir exists from parent worktree checkout —
                 # replace with symlink to source so it has the correct content.
-                import shutil
-
                 shutil.rmtree(child_workspace)
                 child_workspace.symlink_to(child_source)
             elif child.is_repo and not child_workspace.exists():
