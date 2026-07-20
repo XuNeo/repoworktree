@@ -16,13 +16,16 @@ from repoworktree.metadata import (
     create_workspace_metadata,
     WorktreeEntry,
 )
+from repoworktree.__main__ import cmd_promote
+import repoworktree.promote as promote_module
 from repoworktree.promote import promote, demote, PromoteError, DemoteError
-from repoworktree.worktree import get_head, DirtyWorktreeError
+from repoworktree.worktree import get_head, list_worktrees, DirtyWorktreeError
 from tests.helpers import (
     assert_is_symlink,
     assert_is_worktree,
     assert_is_real_dir,
     make_dirty,
+    make_commit,
 )
 
 
@@ -65,6 +68,25 @@ def _read_worktree_exclude(worktree_path: Path) -> str:
     if exclude_file.exists():
         return exclude_file.read_text()
     return ""
+
+
+def _assert_git_toplevel_is_path(repo_path: Path) -> None:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=repo_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert Path(result.stdout.strip()) == repo_path
+
+
+class _PromoteArgs:
+    workspace = None
+    repo_path = ""
+    branch = None
+    pin = None
+    force = False
 
 
 def test_promote_top_level(repo_env, workspace_dir):
@@ -126,12 +148,59 @@ def test_promote_parent_with_child_worktree(repo_env, workspace_dir):
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
 
-def test_promote_already_worktree(repo_env, workspace_dir):
-    """Promote an already-worktree repo → raises error."""
+def test_promote_parent_promotes_descendant_repos(repo_env, workspace_dir):
+    """Promote a repo → promotes that repo and all repos under its path."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+
+    promoted = promote(workspace_dir, repo_env.source_dir, "frameworks/system", paths)
+
+    assert promoted == [
+        "frameworks/system",
+        "frameworks/system/core",
+        "frameworks/system/kvdb",
+    ]
+
+    for repo_path in [
+        "frameworks/system",
+        "frameworks/system/core",
+        "frameworks/system/kvdb",
+    ]:
+        wt_path = workspace_dir / repo_path
+        assert_is_worktree(wt_path)
+        _assert_git_toplevel_is_path(wt_path)
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert [w.path for w in meta.worktrees] == [
+        "frameworks/system",
+        "frameworks/system/core",
+        "frameworks/system/kvdb",
+    ]
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_existing_parent_promotes_missing_descendant_repos(repo_env, workspace_dir):
+    """Promote an existing worktree parent → promotes missing descendant repos."""
     paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"nuttx"})
 
+    promoted = promote(workspace_dir, repo_env.source_dir, "nuttx", paths)
+
+    assert promoted == ["nuttx/fs/fatfs"]
+    assert_is_worktree(workspace_dir / "nuttx")
+    assert_is_worktree(workspace_dir / "nuttx" / "fs" / "fatfs")
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert [w.path for w in meta.worktrees] == ["nuttx", "nuttx/fs/fatfs"]
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_already_worktree_with_no_missing_descendants(repo_env, workspace_dir):
+    """Promote an already-worktree leaf repo → raises error."""
+    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"external/lib-a"})
+
     with pytest.raises(PromoteError, match="Already a worktree"):
-        promote(workspace_dir, repo_env.source_dir, "nuttx", paths)
+        promote(workspace_dir, repo_env.source_dir, "external/lib-a", paths)
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
@@ -147,7 +216,7 @@ def test_promote_invalid_repo(repo_env, workspace_dir):
 
 
 def test_promote_with_pin(repo_env, workspace_dir):
-    """Promote with pinned version → worktree at specified commit."""
+    """Promote with pinned version → requested worktree at specified commit."""
     paths = _create_all_symlink_ws(repo_env, workspace_dir)
     pin_commit = get_head(repo_env.source_dir / "nuttx")
 
@@ -158,9 +227,338 @@ def test_promote_with_pin(repo_env, workspace_dir):
 
     meta = load_workspace_metadata(workspace_dir)
     nuttx_entry = meta.find_worktree("nuttx")
+    fatfs_entry = meta.find_worktree("nuttx/fs/fatfs")
     assert nuttx_entry is not None
+    assert fatfs_entry is not None
     assert nuttx_entry.pinned == pin_commit
+    assert fatfs_entry.pinned is None
+    assert get_head(workspace_dir / "nuttx" / "fs" / "fatfs") == get_head(
+        repo_env.source_dir / "nuttx" / "fs" / "fatfs"
+    )
 
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_restores_symlink_when_worktree_add_fails(
+    repo_env, workspace_dir, monkeypatch
+):
+    """Promote failure after unlinking a symlink restores that symlink."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    real_add = promote_module.git_worktree_add
+
+    def fail_adding_core(
+        source, target, branch=None, pin_version=None, create_branch=True
+    ):
+        if str(target).endswith("frameworks/system/core"):
+            raise RuntimeError("fail adding core")
+        real_add(source, target, branch, pin_version, create_branch=create_branch)
+
+    monkeypatch.setattr(promote_module, "git_worktree_add", fail_adding_core)
+
+    with pytest.raises(RuntimeError, match="fail adding core"):
+        promote(workspace_dir, repo_env.source_dir, "frameworks/system/core", paths)
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert meta.find_worktree("frameworks/system/core") is None
+    assert_is_symlink(
+        workspace_dir / "frameworks" / "system" / "core",
+        repo_env.source_dir / "frameworks" / "system" / "core",
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_cleans_partial_dir_before_restoring_symlink(
+    repo_env, workspace_dir, monkeypatch
+):
+    """Promote failure removes partial dirs before restoring source symlink."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    real_add = promote_module.git_worktree_add
+
+    def fail_with_partial_dir(
+        source, target, branch=None, pin_version=None, create_branch=True
+    ):
+        if str(target).endswith("frameworks/system/core"):
+            target.mkdir(parents=True, exist_ok=True)
+            (target / "partial.txt").write_text("partial")
+            raise RuntimeError("partial add failure")
+        real_add(source, target, branch, pin_version, create_branch=create_branch)
+
+    monkeypatch.setattr(promote_module, "git_worktree_add", fail_with_partial_dir)
+
+    with pytest.raises(RuntimeError, match="partial add failure"):
+        promote(workspace_dir, repo_env.source_dir, "frameworks/system/core", paths)
+
+    assert_is_symlink(
+        workspace_dir / "frameworks" / "system" / "core",
+        repo_env.source_dir / "frameworks" / "system" / "core",
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_rolls_back_parent_when_descendant_fails(repo_env, workspace_dir):
+    """Failed descendant promote leaves no partially promoted parent."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    subprocess.run(
+        ["git", "branch", "feat-conflict"],
+        cwd=repo_env.source_dir / "frameworks" / "system" / "core",
+        check=True,
+    )
+
+    with pytest.raises(Exception, match="feat-conflict"):
+        promote(
+            workspace_dir,
+            repo_env.source_dir,
+            "frameworks/system",
+            paths,
+            branch="feat-conflict",
+        )
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert meta.find_worktree("frameworks/system") is None
+    assert meta.find_worktree("frameworks/system/core") is None
+    assert meta.find_worktree("frameworks/system/kvdb") is None
+    assert_is_symlink(
+        workspace_dir / "frameworks" / "system",
+        repo_env.source_dir / "frameworks" / "system",
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_rolls_back_child_when_parent_add_fails_before_parent_exists(
+    repo_env, workspace_dir
+):
+    """Parent add failure restores child worktrees removed before the add."""
+    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps/system/adb"})
+    subprocess.run(
+        ["git", "branch", "parent-conflict"],
+        cwd=repo_env.source_dir / "apps",
+        check=True,
+    )
+
+    with pytest.raises(Exception, match="parent-conflict"):
+        promote(
+            workspace_dir,
+            repo_env.source_dir,
+            "apps",
+            paths,
+            branch="parent-conflict",
+        )
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert meta.find_worktree("apps") is None
+    assert meta.find_worktree("apps/system/adb") is not None
+    assert_is_real_dir(workspace_dir / "apps")
+    assert_is_worktree(workspace_dir / "apps" / "system" / "adb")
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_nested_parent_preserves_grandchild_worktrees(repo_env, workspace_dir):
+    """Promoting nested parents preserves deeper child worktrees."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+
+    promote(workspace_dir, repo_env.source_dir, "frameworks/system/core", paths)
+    promote(workspace_dir, repo_env.source_dir, "frameworks/system", paths)
+    promote(workspace_dir, repo_env.source_dir, "frameworks", paths)
+
+    for repo_path in [
+        "frameworks",
+        "frameworks/system",
+        "frameworks/system/core",
+        "frameworks/system/kvdb",
+    ]:
+        assert_is_worktree(workspace_dir / repo_path)
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert {w.path for w in meta.worktrees} >= {
+        "frameworks",
+        "frameworks/system",
+        "frameworks/system/core",
+        "frameworks/system/kvdb",
+    }
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_parent_restores_pinned_child_branch(repo_env, workspace_dir):
+    """Parent promote restores an existing child branch at its pinned commit."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    child_src = repo_env.source_dir / "apps" / "system" / "adb"
+    pinned_commit = get_head(child_src)
+    make_commit(child_src, filename="source_head.txt")
+
+    promote(
+        workspace_dir,
+        repo_env.source_dir,
+        "apps/system/adb",
+        paths,
+        branch="child-pinned",
+        pin_version=pinned_commit,
+    )
+    make_commit(
+        workspace_dir / "apps" / "system" / "adb",
+        filename="branch_head.txt",
+    )
+    assert get_head(workspace_dir / "apps" / "system" / "adb") != pinned_commit
+
+    promote(workspace_dir, repo_env.source_dir, "apps", paths)
+
+    meta = load_workspace_metadata(workspace_dir)
+    child = meta.find_worktree("apps/system/adb")
+    assert child is not None
+    assert child.branch == "child-pinned"
+    assert child.pinned == pinned_commit
+    assert get_head(workspace_dir / "apps" / "system" / "adb") == pinned_commit
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_parent_restores_existing_child_branch(repo_env, workspace_dir):
+    """Parent promote restores a child worktree on its existing branch."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    promote(
+        workspace_dir,
+        repo_env.source_dir,
+        "apps/system/adb",
+        paths,
+        branch="child-branch",
+    )
+
+    promote(workspace_dir, repo_env.source_dir, "apps", paths)
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert meta.find_worktree("apps") is not None
+    child = meta.find_worktree("apps/system/adb")
+    assert child is not None
+    assert child.branch == "child-branch"
+    assert_is_worktree(workspace_dir / "apps")
+    assert_is_worktree(workspace_dir / "apps" / "system" / "adb")
+    result = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=workspace_dir / "apps" / "system" / "adb",
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert result.stdout.strip() == "child-branch"
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_rolls_back_removed_child_worktree_on_restore_failure(
+    repo_env, workspace_dir, monkeypatch
+):
+    """Rollback restores metadata children even if they were already removed."""
+    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps/system/adb"})
+    real_add = promote_module.git_worktree_add
+
+    failed_once = False
+
+    def fail_restoring_child(
+        source, target, branch=None, pin_version=None, create_branch=True
+    ):
+        nonlocal failed_once
+        if str(target).endswith("apps/system/adb") and not failed_once:
+            failed_once = True
+            raise RuntimeError("fail restoring child")
+        real_add(source, target, branch, pin_version, create_branch=create_branch)
+
+    monkeypatch.setattr(promote_module, "git_worktree_add", fail_restoring_child)
+
+    with pytest.raises(RuntimeError, match="fail restoring child"):
+        promote(workspace_dir, repo_env.source_dir, "apps", paths)
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert meta.find_worktree("apps") is None
+    assert meta.find_worktree("apps/system/adb") is not None
+    assert_is_real_dir(workspace_dir / "apps")
+    assert_is_worktree(workspace_dir / "apps" / "system" / "adb")
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_rolls_back_parent_with_existing_child_worktree(
+    repo_env, workspace_dir, monkeypatch
+):
+    """Failed parent promote preserves pre-existing child worktree topology."""
+    paths = _create_ws_with_worktrees(repo_env, workspace_dir, {"apps/system/adb"})
+    real_save = promote_module.save_workspace_metadata
+
+    def fail_saving_parent(workspace, meta):
+        if meta.find_worktree("apps"):
+            raise RuntimeError("fail after parent add")
+        real_save(workspace, meta)
+
+    monkeypatch.setattr(promote_module, "save_workspace_metadata", fail_saving_parent)
+
+    with pytest.raises(RuntimeError, match="fail after parent add"):
+        promote(workspace_dir, repo_env.source_dir, "apps", paths)
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert meta.find_worktree("apps") is None
+    assert meta.find_worktree("apps/system/adb") is not None
+    assert_is_real_dir(workspace_dir / "apps")
+    assert_is_worktree(workspace_dir / "apps" / "system" / "adb")
+    worktree_paths = [
+        w["path"] for w in list_worktrees(repo_env.source_dir / "apps" / "system" / "adb")
+    ]
+    assert str(workspace_dir / "apps" / "system" / "adb") in worktree_paths
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_rolls_back_current_target_after_worktree_add_failure_window(
+    repo_env, workspace_dir, monkeypatch
+):
+    """Failure after current target add still rolls back that target."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    real_save = promote_module.save_workspace_metadata
+
+    def fail_saving_child(workspace, meta):
+        if meta.find_worktree("frameworks/system/core"):
+            raise RuntimeError("fail after child add")
+        real_save(workspace, meta)
+
+    monkeypatch.setattr(promote_module, "save_workspace_metadata", fail_saving_child)
+
+    with pytest.raises(RuntimeError, match="fail after child add"):
+        promote(workspace_dir, repo_env.source_dir, "frameworks/system", paths)
+
+    meta = load_workspace_metadata(workspace_dir)
+    assert meta.find_worktree("frameworks/system") is None
+    assert meta.find_worktree("frameworks/system/core") is None
+    assert_is_symlink(
+        workspace_dir / "frameworks" / "system",
+        repo_env.source_dir / "frameworks" / "system",
+    )
+    worktree_paths = [
+        w["path"]
+        for w in list_worktrees(repo_env.source_dir / "frameworks" / "system" / "core")
+    ]
+    assert str(workspace_dir / "frameworks" / "system" / "core") not in worktree_paths
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_cmd_promote_lists_actual_promoted_repos(repo_env, workspace_dir, capsys):
+    """CLI output lists the repos that were actually promoted."""
+    _create_all_symlink_ws(repo_env, workspace_dir)
+    args = _PromoteArgs()
+    args.workspace = str(workspace_dir)
+    args.repo_path = "frameworks/system"
+
+    assert cmd_promote(args) == 0
+
+    out = capsys.readouterr().out
+    assert "Promoted 3 repos:" in out
+    assert "  frameworks/system\n" in out
+    assert "  frameworks/system/core\n" in out
+    assert "  frameworks/system/kvdb\n" in out
+
+    paths = scan_repos(repo_env.source_dir)
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
 
@@ -345,15 +743,9 @@ def test_promote_worktree_sibling_files_visible_in_git_status(repo_env, workspac
         "child repo exclusion missing or over-broad in promote path"
     )
 
-    # The child repo fs/fatfs should be a symlink (not a plain checkout dir)
+    # The child repo fs/fatfs should be promoted too, not left as an overlay symlink.
     fatfs_ws = nuttx_ws / "fs" / "fatfs"
-    assert fatfs_ws.exists(), (
-        f"Child repo fs/fatfs should exist after promote (as symlink to source)"
-    )
-    assert fatfs_ws.is_symlink(), (
-        f"Child repo fs/fatfs should be symlinked after promote, "
-        f"got: symlink={fatfs_ws.is_symlink()}, dir={fatfs_ws.is_dir()}"
-    )
+    assert_is_worktree(fatfs_ws)
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 

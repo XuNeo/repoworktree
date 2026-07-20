@@ -40,6 +40,7 @@ def add_worktree(
     target_path: Path,
     branch: str | None = None,
     pin_version: str | None = None,
+    create_branch: bool = True,
 ) -> None:
     """
     Create a git worktree.
@@ -47,25 +48,36 @@ def add_worktree(
     Args:
         source_repo: Path to the source git repo (must have .git).
         target_path: Where to create the worktree.
-        branch: If set, create a named branch. Otherwise detached HEAD.
+        branch: If set, create or check out a named branch.
         pin_version: If set, checkout this commit/tag/branch.
+        create_branch: If False, check out an existing branch instead of creating it.
     """
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
     cmd = ["worktree", "add"]
 
     if branch:
-        cmd += ["-b", branch]
-        cmd.append(str(target_path))
-        if pin_version:
-            cmd.append(pin_version)
+        if create_branch:
+            cmd += ["-b", branch]
+        else:
+            cmd.append(str(target_path))
+            cmd.append(branch)
+        if create_branch:
+            cmd.append(str(target_path))
+            if pin_version:
+                cmd.append(pin_version)
     elif pin_version:
         cmd += ["--detach", str(target_path), pin_version]
     else:
         cmd += ["--detach", str(target_path)]
 
+    def checkout_pin_if_needed() -> None:
+        if branch and not create_branch and pin_version:
+            _git(["checkout", pin_version], cwd=target_path)
+
     try:
         _git(cmd, cwd=source_repo)
+        checkout_pin_if_needed()
     except subprocess.CalledProcessError as e:
         if "already registered worktree" in e.stderr:
             # Remove ONLY this worktree entry (not global prune which
@@ -77,6 +89,7 @@ def add_worktree(
             )
             try:
                 _git(cmd, cwd=source_repo)
+                checkout_pin_if_needed()
                 return
             except subprocess.CalledProcessError as e2:
                 raise WorktreeError(

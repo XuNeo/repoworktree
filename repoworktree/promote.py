@@ -99,9 +99,143 @@ def promote(
     branch: str | None = None,
     pin_version: str | None = None,
     force: bool = False,
+) -> list[str]:
+    """Promote a sub-repo and all descendant sub-repos to git worktrees."""
+    if repo_path not in all_repos:
+        raise PromoteError(f"Not a valid sub-repo path: {repo_path}")
+
+    targets = [r for r in all_repos if r == repo_path or r.startswith(repo_path + "/")]
+    targets.sort(key=lambda p: (p.count("/"), p))
+
+    promoted = []
+    current = None
+    try:
+        for target in targets:
+            meta = load_workspace_metadata(workspace)
+            if meta.find_worktree(target):
+                continue
+            current = target
+            _promote_one(
+                workspace,
+                source,
+                target,
+                all_repos,
+                branch=branch,
+                pin_version=pin_version if target == repo_path else None,
+                force=force,
+            )
+            promoted.append(target)
+            current = None
+    except Exception:
+        rollback_targets = promoted[:]
+        if current is not None:
+            rollback_targets.append(current)
+        for target in sorted(rollback_targets, key=lambda p: (p.count("/"), p), reverse=True):
+            _rollback_promote_target(workspace, source, target, all_repos)
+        raise
+
+    if not promoted:
+        raise PromoteError(f"Already a worktree: {repo_path}")
+
+    return promoted
+
+
+def _worktree_depth_key(entry) -> tuple[int, str]:
+    return (entry.path.count("/"), entry.path)
+
+
+def _child_worktrees(meta, repo_path: str) -> list:
+    return [w for w in meta.worktrees if w.path.startswith(repo_path + "/")]
+
+
+def _existing_worktrees(workspace: Path, entries: list) -> list:
+    return [
+        entry
+        for entry in entries
+        if (workspace / entry.path).exists()
+        and ((workspace / entry.path) / ".git").is_file()
+    ]
+
+
+def _remove_worktrees(workspace: Path, source: Path, entries: list) -> None:
+    for entry in sorted(entries, key=_worktree_depth_key, reverse=True):
+        entry_ws = workspace / entry.path
+        if entry_ws.exists() and (entry_ws / ".git").is_file():
+            try:
+                git_worktree_remove(source / entry.path, entry_ws, force=True)
+            except Exception:
+                pass
+
+
+def _restore_worktrees(workspace: Path, source: Path, entries: list) -> None:
+    for entry in sorted(entries, key=_worktree_depth_key):
+        entry_ws = workspace / entry.path
+        if entry_ws.is_symlink():
+            entry_ws.unlink()
+        elif entry_ws.is_dir():
+            shutil.rmtree(entry_ws)
+        git_worktree_add(
+            source / entry.path,
+            entry_ws,
+            branch=entry.branch,
+            pin_version=entry.pinned,
+            create_branch=False,
+        )
+
+
+def _restore_child_worktrees(
+    workspace: Path,
+    source: Path,
+    repo_path: str,
+    all_repos: list[str],
+    meta,
+) -> None:
+    child_wts = _child_worktrees(meta, repo_path)
+    if not child_wts:
+        return
+
+    _rebuild_as_split_dir(workspace, source, repo_path, all_repos, meta)
+    _restore_worktrees(workspace, source, child_wts)
+
+
+def _rollback_promote_target(
+    workspace: Path,
+    source: Path,
+    repo_path: str,
+    all_repos: list[str],
+) -> None:
+    meta = load_workspace_metadata(workspace)
+    target_ws = workspace / repo_path
+    target_src = source / repo_path
+    child_wts = _child_worktrees(meta, repo_path)
+
+    try:
+        if meta.find_worktree(repo_path):
+            demote(workspace, source, repo_path, all_repos, force=True)
+        elif (target_ws / ".git").is_file():
+            _remove_worktrees(workspace, source, child_wts)
+            git_worktree_remove(target_src, target_ws, force=True)
+            if child_wts:
+                _restore_child_worktrees(workspace, source, repo_path, all_repos, meta)
+            else:
+                target_ws.symlink_to(target_src)
+        elif child_wts:
+            _restore_child_worktrees(workspace, source, repo_path, all_repos, meta)
+    except Exception:
+        pass
+
+
+def _promote_one(
+    workspace: Path,
+    source: Path,
+    repo_path: str,
+    all_repos: list[str],
+    branch: str | None = None,
+    pin_version: str | None = None,
+    force: bool = False,
 ) -> None:
     """
-    Promote a sub-repo from symlink/directory to git worktree.
+    Promote a single sub-repo from symlink/directory to git worktree.
 
     Handles three cases:
     1. Target is directly a symlink (top-level repo) → replace with worktree
@@ -124,17 +258,8 @@ def promote(
         raise PromoteError(f"Source repo does not exist: {target_src}")
 
     # Find existing child worktrees inside this repo
-    child_wts = [w for w in meta.worktrees if w.path.startswith(repo_path + "/")]
-    child_info = []
-    for cw in child_wts:
-        child_ws_path = workspace / cw.path
-        child_src_path = source / cw.path
-        if child_ws_path.exists() and (child_ws_path / ".git").is_file():
-            child_info.append(cw)
-            try:
-                git_worktree_remove(child_src_path, child_ws_path, force=True)
-            except Exception:
-                pass
+    child_info = _existing_worktrees(workspace, _child_worktrees(meta, repo_path))
+    _remove_worktrees(workspace, source, child_info)
 
     # Split symlinks along the path to the target
     _ensure_path_is_real(workspace, source, repo_path, all_repos)
@@ -142,7 +267,11 @@ def promote(
     # Now target_ws should be either a symlink or a directory
     # If it's a symlink, remove it
     backup = None
+    restore_symlink_on_add_failure = False
+    symlink_target = target_src
     if target_ws.is_symlink():
+        symlink_target = os.readlink(target_ws)
+        restore_symlink_on_add_failure = True
         target_ws.unlink()
     elif target_ws.is_dir():
         if (target_ws / ".git").is_file():
@@ -161,29 +290,29 @@ def promote(
             shutil.rmtree(backup)
         shutil.copytree(target_ws, backup, symlinks=True)
         shutil.rmtree(target_ws)
+    else:
+        restore_symlink_on_add_failure = True
 
     try:
         git_worktree_add(target_src, target_ws, branch=branch, pin_version=pin_version)
     except Exception:
         if backup is not None and backup.exists():
             shutil.move(str(backup), str(target_ws))
+        elif restore_symlink_on_add_failure:
+            if (target_ws / ".git").is_file():
+                git_worktree_remove(target_src, target_ws, force=True)
+            elif target_ws.is_dir():
+                shutil.rmtree(target_ws)
+            elif target_ws.exists() or target_ws.is_symlink():
+                target_ws.unlink()
+            target_ws.symlink_to(symlink_target)
         raise
 
     if backup is not None and backup.exists():
         shutil.rmtree(backup)
 
     # Restore child worktrees on top
-    for cw in child_info:
-        child_ws_path = workspace / cw.path
-        child_src_path = source / cw.path
-        # The parent worktree may have created the directory already; remove it
-        if child_ws_path.exists() and not (child_ws_path / ".git").is_file():
-            shutil.rmtree(child_ws_path)
-        elif child_ws_path.is_symlink():
-            child_ws_path.unlink()
-        git_worktree_add(
-            child_src_path, child_ws_path, branch=cw.branch, pin_version=cw.pinned
-        )
+    _restore_worktrees(workspace, source, child_info)
 
     # Handle non-worktree child repos: symlink on top and exclude from git
     _handle_non_worktree_child_repos(
@@ -245,20 +374,10 @@ def demote(
             )
 
     # Save child worktree info for restoration
-    child_info = []
-    for cw in child_wts:
-        child_ws_path = workspace / cw.path
-        if child_ws_path.exists() and (child_ws_path / ".git").is_file():
-            child_info.append(cw)
+    child_info = _existing_worktrees(workspace, child_wts)
 
     # Remove child worktrees temporarily
-    for cw in child_info:
-        child_ws_path = workspace / cw.path
-        child_src_path = source / cw.path
-        try:
-            git_worktree_remove(child_src_path, child_ws_path, force=True)
-        except Exception:
-            pass
+    _remove_worktrees(workspace, source, child_info)
 
     # Remove the main worktree
     # When child worktrees exist, has_local_changes() gives false positives
@@ -270,16 +389,7 @@ def demote(
     if child_info:
         _rebuild_as_split_dir(workspace, source, repo_path, all_repos, meta)
         # Restore child worktrees
-        for cw in child_info:
-            child_ws_path = workspace / cw.path
-            child_src_path = source / cw.path
-            if child_ws_path.is_symlink():
-                child_ws_path.unlink()
-            elif child_ws_path.is_dir():
-                shutil.rmtree(child_ws_path)
-            git_worktree_add(
-                child_src_path, child_ws_path, branch=cw.branch, pin_version=cw.pinned
-            )
+        _restore_worktrees(workspace, source, child_info)
     else:
         target_ws.symlink_to(target_src)
 

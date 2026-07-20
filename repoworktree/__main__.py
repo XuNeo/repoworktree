@@ -8,6 +8,7 @@ Usage: rwt <command> [options]
 import argparse
 import shutil
 import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from repoworktree.scanner import scan_repos, build_trie
@@ -22,6 +23,13 @@ from repoworktree.metadata import (
 )
 from repoworktree.layout import build_workspace, teardown_workspace
 from repoworktree.worktree import get_head
+
+
+def _package_version() -> str:
+    try:
+        return version("repoworktree")
+    except PackageNotFoundError:
+        return "unknown"
 
 
 def _find_source_root(path=None):
@@ -458,7 +466,7 @@ def cmd_promote(args):
     all_repos = scan_repos(source_dir)
 
     try:
-        promote(
+        promoted = promote(
             ws_path,
             source_dir,
             args.repo_path,
@@ -467,7 +475,12 @@ def cmd_promote(args):
             pin_version=args.pin,
             force=getattr(args, "force", False),
         )
-        print(f"Promoted {args.repo_path} to worktree.")
+        if len(promoted) == 1:
+            print(f"Promoted {promoted[0]} to worktree.")
+        else:
+            print(f"Promoted {len(promoted)} repos:")
+            for repo in promoted:
+                print(f"  {repo}")
         return 0
     except DirtyWorktreeError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -708,9 +721,18 @@ def cmd_forall(args):
 
 
 def build_parser() -> argparse.ArgumentParser:
+    package_version = _package_version()
     parser = argparse.ArgumentParser(
         prog="rwt",
-        description="repoworktree: isolated workspaces for repo-managed projects",
+        description=(
+            f"repoworktree {package_version}: "
+            "isolated workspaces for repo-managed projects"
+        ),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"rwt {package_version}",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

@@ -3,6 +3,7 @@
 import subprocess
 
 import pytest
+from tests.helpers import make_commit
 from repoworktree.worktree import (
     add_worktree,
     remove_worktree,
@@ -55,6 +56,45 @@ def test_add_branch(repo_env, tmp_path):
     # Cleanup
     _git(["worktree", "remove", "--force", str(target)], cwd=source)
     _git(["branch", "-D", "test-branch"], cwd=source)
+
+
+def test_add_existing_branch(repo_env, tmp_path):
+    """Create worktree by checking out an existing branch."""
+    source = repo_env.source_dir / "nuttx"
+    target = tmp_path / "nuttx-existing-branch"
+    _git(["branch", "existing-branch"], cwd=source)
+
+    add_worktree(source, target, branch="existing-branch", create_branch=False)
+
+    result = _git(["symbolic-ref", "--short", "HEAD"], cwd=target)
+    assert result.stdout.strip() == "existing-branch"
+
+    # Cleanup
+    remove_worktree(source, target, force=True)
+    _git(["branch", "-D", "existing-branch"], cwd=source)
+
+
+def test_add_existing_branch_with_pin(repo_env, tmp_path):
+    """Create existing-branch worktree and checkout a pinned commit."""
+    source = repo_env.source_dir / "nuttx"
+    pinned = get_head(source)
+    _git(["branch", "existing-pinned"], cwd=source)
+    make_commit(source, filename="branch_head.txt")
+    target = tmp_path / "nuttx-existing-pinned"
+
+    add_worktree(
+        source,
+        target,
+        branch="existing-pinned",
+        pin_version=pinned,
+        create_branch=False,
+    )
+
+    assert get_head(target) == pinned
+
+    # Cleanup
+    remove_worktree(source, target, force=True)
+    _git(["branch", "-D", "existing-pinned"], cwd=source)
 
 
 def test_add_pinned(repo_env, tmp_path):
