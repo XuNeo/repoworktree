@@ -140,6 +140,23 @@ def promote(
     return promoted
 
 
+def _find_symlink_ancestor(root: Path, rel_path: str) -> Path | None:
+    path = root
+    for part in rel_path.split("/")[:-1]:
+        path /= part
+        if path.is_symlink():
+            return path
+    return None
+
+
+def _reject_symlinked_workspace_ancestor(root: Path, rel_path: str) -> None:
+    symlink = _find_symlink_ancestor(root, rel_path)
+    if symlink is not None:
+        raise PromoteError(
+            f"Workspace repo path traverses symlink: {rel_path} ({symlink})"
+        )
+
+
 def _worktree_depth_key(entry) -> tuple[int, str]:
     return (entry.path.count("/"), entry.path)
 
@@ -257,6 +274,11 @@ def _promote_one(
     if not target_src.is_dir():
         raise PromoteError(f"Source repo does not exist: {target_src}")
 
+    parent_wt = _find_parent_worktree(workspace, repo_path, meta)
+    if parent_wt is not None:
+        rel_path = str(target_ws.relative_to(parent_wt))
+        _reject_symlinked_workspace_ancestor(parent_wt, rel_path)
+
     # Find existing child worktrees inside this repo
     child_info = _existing_worktrees(workspace, _child_worktrees(meta, repo_path))
     _remove_worktrees(workspace, source, child_info)
@@ -306,6 +328,22 @@ def _promote_one(
             elif target_ws.exists() or target_ws.is_symlink():
                 target_ws.unlink()
             target_ws.symlink_to(symlink_target)
+        raise
+
+    try:
+        for child in all_repos:
+            if child.startswith(repo_path + "/"):
+                rel_path = child[len(repo_path) + 1 :]
+                _reject_symlinked_workspace_ancestor(target_ws, rel_path)
+    except PromoteError:
+        git_worktree_remove(target_src, target_ws, force=True)
+        if backup is not None and backup.exists():
+            shutil.move(str(backup), str(target_ws))
+        elif child_info:
+            _rebuild_as_split_dir(workspace, source, repo_path, all_repos, meta)
+        else:
+            target_ws.symlink_to(symlink_target)
+        _restore_worktrees(workspace, source, child_info)
         raise
 
     if backup is not None and backup.exists():

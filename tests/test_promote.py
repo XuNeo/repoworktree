@@ -81,6 +81,30 @@ def _assert_git_toplevel_is_path(repo_path: Path) -> None:
     assert Path(result.stdout.strip()) == repo_path
 
 
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _init_test_repo(repo: Path) -> None:
+    repo.mkdir(parents=True)
+    _git(repo, "init")
+    _git(repo, "config", "user.email", "test@test.com")
+    _git(repo, "config", "user.name", "Test")
+
+
+def _commit_test_repo(repo: Path, message: str) -> str:
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
 class _PromoteArgs:
     workspace = None
     repo_path = ""
@@ -174,6 +198,82 @@ def test_parent_overlay_does_not_modify_nested_source_repo(tmp_path, monkeypatch
     assert_is_symlink(worktree / "child", source / "parent" / "child")
     assert source_grandchild.is_dir()
     assert not source_grandchild.is_symlink()
+    assert sentinel.read_text() == "source content"
+
+
+def test_parent_pin_symlink_does_not_modify_source_or_existing_child(tmp_path):
+    """A pinned parent tree must not redirect child restoration into source."""
+    source = tmp_path / "source"
+    workspace = tmp_path / "workspace"
+    source_parent = source / "parent"
+    source_child = source_parent / "link" / "grandchild"
+    source_victim = source / "shared" / "grandchild"
+
+    _init_test_repo(source_parent)
+    (source_parent / "link").symlink_to("../shared")
+    old_parent = _commit_test_repo(source_parent, "symlink layout")
+    (source_parent / "link").unlink()
+    (source_parent / "link").mkdir()
+    (source_parent / "link" / "parent.txt").write_text("parent content")
+    _commit_test_repo(source_parent, "directory layout")
+
+    _init_test_repo(source_child)
+    (source_child / "child.txt").write_text("child content")
+    _commit_test_repo(source_child, "child")
+
+    source_victim.mkdir(parents=True)
+    sentinel = source_victim / "sentinel.txt"
+    sentinel.write_text("source content")
+    workspace.mkdir()
+    (workspace / "parent").symlink_to(source_parent)
+    (workspace / "shared").symlink_to(source / "shared")
+    meta = create_workspace_metadata(source=str(source), name="test")
+    save_workspace_metadata(workspace, meta)
+    paths = ["parent", "parent/link/grandchild"]
+
+    promote(workspace, source, "parent/link/grandchild", paths)
+
+    with pytest.raises(PromoteError, match="Workspace repo path traverses symlink"):
+        promote(workspace, source, "parent", paths, pin_version=old_parent)
+
+    assert_is_worktree(workspace / "parent" / "link" / "grandchild")
+    assert [w.path for w in load_workspace_metadata(workspace).worktrees] == [
+        "parent/link/grandchild"
+    ]
+    assert source_victim.is_dir()
+    assert not source_victim.is_symlink()
+    assert sentinel.read_text() == "source content"
+
+
+def test_promote_leaf_under_source_symlink(tmp_path):
+    """A leaf repo under a source symlink can be promoted safely."""
+    source = tmp_path / "source"
+    workspace = tmp_path / "workspace"
+    source_parent = source / "parent"
+    source_child = source / "shared" / "grandchild"
+
+    _init_test_repo(source_parent)
+    (source_parent / "link").symlink_to("../shared")
+    _commit_test_repo(source_parent, "symlink layout")
+    _init_test_repo(source_child)
+    sentinel = source_child / "sentinel.txt"
+    sentinel.write_text("source content")
+    _commit_test_repo(source_child, "child")
+
+    workspace.mkdir()
+    (workspace / "parent").symlink_to(source_parent)
+    meta = create_workspace_metadata(source=str(source), name="test")
+    save_workspace_metadata(workspace, meta)
+
+    promoted = promote(
+        workspace,
+        source,
+        "parent/link/grandchild",
+        ["parent", "parent/link/grandchild"],
+    )
+
+    assert promoted == ["parent/link/grandchild"]
+    assert_is_worktree(workspace / "parent" / "link" / "grandchild")
     assert sentinel.read_text() == "source content"
 
 
