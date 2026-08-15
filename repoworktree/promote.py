@@ -416,9 +416,17 @@ def _handle_non_worktree_child_repos(
     exclude from git first, then replace their checkout dirs with symlinks to source.
     """
     worktree_set = {w.path for w in meta.worktrees}
-    child_repos = [
-        r for r in all_repos if r.startswith(repo_path + "/") and r not in worktree_set
+    descendants = [
+        r
+        for r in all_repos
+        if r.startswith(repo_path + "/")
+        and r not in worktree_set
+        and not any(worktree.startswith(r + "/") for worktree in worktree_set)
     ]
+    child_repos = []
+    for descendant in sorted(descendants, key=lambda path: (path.count("/"), path)):
+        if not any(descendant.startswith(child + "/") for child in child_repos):
+            child_repos.append(descendant)
     if not child_repos:
         return
 

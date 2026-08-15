@@ -148,6 +148,52 @@ def test_promote_parent_with_child_worktree(repo_env, workspace_dir):
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 
 
+def test_parent_overlay_does_not_modify_nested_source_repo(tmp_path, monkeypatch):
+    """Overlaying a child repo must not traverse its symlink into source descendants."""
+    source = tmp_path / "source"
+    workspace = tmp_path / "workspace"
+    worktree = workspace / "parent"
+    source_grandchild = source / "parent" / "child" / "grandchild"
+    source_grandchild.mkdir(parents=True)
+    sentinel = source_grandchild / "sentinel.txt"
+    sentinel.write_text("source content")
+    worktree.mkdir(parents=True)
+    meta = create_workspace_metadata(source=str(source), name="test")
+
+    monkeypatch.setattr(promote_module, "_exclude_child_repos", lambda *_: None)
+
+    promote_module._handle_non_worktree_child_repos(
+        workspace,
+        source,
+        "parent",
+        ["parent", "parent/child", "parent/child/grandchild"],
+        meta,
+        worktree,
+    )
+
+    assert_is_symlink(worktree / "child", source / "parent" / "child")
+    assert source_grandchild.is_dir()
+    assert not source_grandchild.is_symlink()
+    assert sentinel.read_text() == "source content"
+
+
+def test_promote_parent_preserves_existing_grandchild_worktree(
+    repo_env, workspace_dir
+):
+    """Promoting a parent must not remove an existing grandchild worktree."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+
+    promote(workspace_dir, repo_env.source_dir, "frameworks/system/core", paths)
+    promote(workspace_dir, repo_env.source_dir, "frameworks", paths)
+
+    assert_is_worktree(workspace_dir / "frameworks" / "system" / "core")
+    _assert_git_toplevel_is_path(
+        workspace_dir / "frameworks" / "system" / "core"
+    )
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
 def test_promote_parent_promotes_descendant_repos(repo_env, workspace_dir):
     """Promote a repo → promotes that repo and all repos under its path."""
     paths = _create_all_symlink_ws(repo_env, workspace_dir)
