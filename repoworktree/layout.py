@@ -429,6 +429,12 @@ def _build_level(
                 child_workspace.symlink_to(child_source)
 
 
+def _symlink_source_entry(entry: Path, target: Path) -> None:
+    """Mirror a source symlink's text, or link a regular entry to the source."""
+    link_target = os.readlink(entry) if entry.is_symlink() else entry
+    target.symlink_to(link_target)
+
+
 def _symlink_non_trie_entries(
     source_dir: Path, workspace_dir: Path, trie_node: TrieNode
 ) -> None:
@@ -452,7 +458,7 @@ def _symlink_non_trie_entries(
 
         target = workspace_dir / entry.name
         if not target.exists() and not target.is_symlink():
-            target.symlink_to(entry)
+            _symlink_source_entry(entry, target)
 
 
 def _exclude_child_repos(worktree_path: Path, trie_node: TrieNode) -> None:

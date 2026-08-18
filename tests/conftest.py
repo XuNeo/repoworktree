@@ -255,6 +255,36 @@ def repo_env(tmp_path_factory) -> RepoTestEnv:
 
 
 @pytest.fixture
+def split_dir_entries(repo_env: RepoTestEnv) -> dict[str, Path | str]:
+    """Create source entries used to verify split-directory symlink behavior."""
+    parent = repo_env.source_dir / "apps"
+    relative_link = parent / "rwt-relative-link"
+    absolute_link = parent / "rwt-absolute-link"
+    regular_file = parent / "README.md"
+    regular_dir = parent / "rwt-shared-dir"
+    relative_target = "README.md"
+    absolute_target = parent / "Makefile"
+
+    relative_link.symlink_to(relative_target)
+    absolute_link.symlink_to(absolute_target)
+    regular_dir.mkdir()
+    (regular_dir / "data.txt").write_text("shared data")
+
+    yield {
+        "relative_link": relative_link,
+        "relative_target": relative_target,
+        "absolute_link": absolute_link,
+        "absolute_target": absolute_target,
+        "regular_file": regular_file,
+        "regular_dir": regular_dir,
+    }
+
+    relative_link.unlink(missing_ok=True)
+    absolute_link.unlink(missing_ok=True)
+    shutil.rmtree(regular_dir, ignore_errors=True)
+
+
+@pytest.fixture
 def workspace_dir(repo_env: RepoTestEnv, tmp_path) -> Path:
     """
     Provide a fresh workspace directory for each test.

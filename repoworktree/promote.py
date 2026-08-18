@@ -21,6 +21,7 @@ from repoworktree.worktree import (
 )
 from repoworktree.layout import (
     _exclude_child_repos,
+    _symlink_source_entry,
     _setup_sparse_checkout,
     _disable_sparse_checkout,
     _setup_worktree_excludes,
@@ -561,7 +562,7 @@ def _symlink_dir_contents(
             continue
         target = ws_dir / entry.name
         if not target.exists() and not target.is_symlink():
-            target.symlink_to(entry)
+            _symlink_source_entry(entry, target)
 
 
 def _rebuild_as_split_dir(

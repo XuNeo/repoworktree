@@ -1,5 +1,6 @@
 """Unit tests for repoworktree/promote.py — Promote / Demote."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -115,6 +116,36 @@ def test_promote_nested_split_symlink(repo_env, workspace_dir):
     assert_is_worktree(workspace_dir / "frameworks" / "system" / "core")
     assert_is_symlink(workspace_dir / "frameworks" / "system" / "kvdb")
     assert_is_symlink(workspace_dir / "frameworks" / "connectivity")
+
+    _cleanup_worktrees(repo_env, workspace_dir, paths)
+
+
+def test_promote_nested_preserves_split_dir_entries(
+    repo_env, workspace_dir, split_dir_entries
+):
+    """Promoting a nested repo preserves source symlink text and shared entries."""
+    paths = _create_all_symlink_ws(repo_env, workspace_dir)
+    apps_ws = workspace_dir / "apps"
+
+    assert os.readlink(apps_ws / "rwt-relative-link") == split_dir_entries[
+        "relative_target"
+    ]
+
+    promote(workspace_dir, repo_env.source_dir, "apps/system/adb", paths)
+
+    assert os.readlink(apps_ws / "rwt-relative-link") == split_dir_entries[
+        "relative_target"
+    ]
+    assert os.readlink(apps_ws / "rwt-absolute-link") == str(
+        split_dir_entries["absolute_target"]
+    )
+    assert os.readlink(apps_ws / "README.md") == str(
+        split_dir_entries["regular_file"]
+    )
+    assert os.readlink(apps_ws / "rwt-shared-dir") == str(
+        split_dir_entries["regular_dir"]
+    )
+    assert_is_worktree(apps_ws / "system" / "adb")
 
     _cleanup_worktrees(repo_env, workspace_dir, paths)
 

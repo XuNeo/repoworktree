@@ -89,6 +89,33 @@ def test_nested_worktree(repo_env, workspace_dir):
     teardown_workspace(repo_env.source_dir, workspace_dir, trie)
 
 
+def test_nested_worktree_preserves_split_dir_entries(
+    repo_env, workspace_dir, split_dir_entries
+):
+    """Splitting an intermediate dir preserves source symlink text and shared entries."""
+    paths = scan_repos(repo_env.source_dir)
+    trie = build_trie(paths, worktree_paths={"apps/system/adb"})
+
+    build_workspace(repo_env.source_dir, workspace_dir, trie)
+
+    apps_ws = workspace_dir / "apps"
+    assert os.readlink(apps_ws / "rwt-relative-link") == split_dir_entries[
+        "relative_target"
+    ]
+    assert os.readlink(apps_ws / "rwt-absolute-link") == str(
+        split_dir_entries["absolute_target"]
+    )
+    assert os.readlink(apps_ws / "README.md") == str(
+        split_dir_entries["regular_file"]
+    )
+    assert os.readlink(apps_ws / "rwt-shared-dir") == str(
+        split_dir_entries["regular_dir"]
+    )
+    assert_is_worktree(apps_ws / "system" / "adb")
+
+    teardown_workspace(repo_env.source_dir, workspace_dir, trie)
+
+
 def test_parent_child_both_worktree(repo_env, workspace_dir):
     """Parent and child repos both as worktree."""
     paths = scan_repos(repo_env.source_dir)
