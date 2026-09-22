@@ -1,6 +1,7 @@
 """Unit tests for repoworktree/layout.py — Layout Engine."""
 
 import os
+import types
 from pathlib import Path
 
 import pytest
@@ -244,3 +245,34 @@ def test_top_level_files_ignored(repo_env, workspace_dir):
     (repo_env.source_dir / "test.elf").unlink()
 
     teardown_workspace(repo_env.source_dir, workspace_dir, trie)
+
+
+def test_git_version_parses_distro_suffix(monkeypatch):
+    """A distro suffix in `git --version` must not defeat the version check.
+
+    macOS reports "git version 2.54.0 (Apple Git-157)"; the previous parser took
+    the last space-separated token, failed to parse "(Apple", and rejected a
+    perfectly good git as version 0.
+    """
+    from repoworktree import layout
+
+    cases = {
+        "git version 2.43.0\n": (2, 43, 0),
+        "git version 2.54.0 (Apple Git-157)\n": (2, 54, 0),
+        "git version 2.39.5 (Apple Git-154)\n": (2, 39, 5),
+        "git version 2.43.0.windows.1\n": (2, 43, 0),
+    }
+
+    for output, expected in cases.items():
+        layout._git_version.cache_clear()
+        monkeypatch.setattr(
+            layout.subprocess,
+            "run",
+            lambda *args, **kwargs: types.SimpleNamespace(
+                stdout=output, returncode=0
+            ),
+        )
+        assert layout._git_version() == expected, output
+        layout._require_git_version((2, 34))  # must not raise
+
+    layout._git_version.cache_clear()
