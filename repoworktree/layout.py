@@ -13,6 +13,7 @@ import functools
 import os
 from pathlib import Path
 
+import re
 import subprocess
 
 from repoworktree.scanner import RepoTrie, TrieNode
@@ -33,15 +34,15 @@ def _git_version() -> tuple[int, ...]:
         text=True,
         check=False,
     )
-    # "git version 2.43.0" → "2.43.0"
-    version_str = result.stdout.strip().rsplit(" ", 1)[-1]
-    parts: list[int] = []
-    for p in version_str.split("."):
-        try:
-            parts.append(int(p))
-        except ValueError:
-            break
-    return tuple(parts) if parts else (0,)
+    # Distributors append their own suffix, e.g.
+    #   "git version 2.54.0 (Apple Git-157)"   (macOS)
+    #   "git version 2.43.0.windows.1"         (Git for Windows)
+    # so take the first N.N[.N] occurrence instead of splitting the whole
+    # tail on "." (which yields "(Apple" / "windows" and fails the check).
+    match = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", result.stdout)
+    if match is None:
+        return (0,)
+    return tuple(int(part) for part in match.groups() if part is not None)
 
 
 def _require_git_version(min_version: tuple[int, ...]) -> None:
